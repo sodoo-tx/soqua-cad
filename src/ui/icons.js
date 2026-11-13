@@ -104,6 +104,8 @@ const I = {
   render: `<path ${g} d="M3 8h18v12H3z"/><path ${g} d="M8 8l2-3h4l2 3"/><circle cx="12" cy="14" r="3.5" ${s}/>`,
   texture: `<path fill="#bfc7d1" d="M3 3h18v18H3z"/><path fill="#4c5a69" d="M3 3h6v6H3zM15 3h6v6h-6zM9 9h6v6H9zM3 15h6v6H3zM15 15h6v6h-6z"/>`,
   turntable: `<ellipse cx="12" cy="17" rx="9" ry="3.4" ${s}/><path ${y} d="M8 9l4-2 4 2v5l-4 2-4-2z"/><path ${s} d="M19 6a8 4 0 00-11-2M8 4l-.6 2.6M8 4l2.6.4"/>`,
+  helix: `<path ${s} d="M6 20c0-2 12-2 12-4s-12-2-12-4 12-2 12-4-12-2-12-4"/><path ${s} stroke-dasharray="2 2" d="M12 2v20"/>`,
+  thread: `<path ${y} d="M8 3h8v18H8z"/><path ${s} d="M8 6l8 2M8 10l8 2M8 14l8 2M8 18l8 2"/>`,
   // view
   fit: `<path ${s} d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><rect x="9" y="9" width="6" height="6" ${y}/>`,
   views: box,

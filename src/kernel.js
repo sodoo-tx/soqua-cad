@@ -131,9 +131,10 @@ export function revolveWire(wire, origin, dir, angleDeg) {
   return R.cast(rev.Shape());
 }
 
-export function sweepProfile(profile, spineWire) {
-  // profile: Face (-> solid) or Wire (-> shell). Sharp path corners are mitred.
-  const cfg = { transitionMode: 'right', forceProfileSpineOthogonality: false };
+export function sweepProfile(profile, spineWire, { frenet = false } = {}) {
+  // profile: Face (-> solid) or Wire (-> shell). Sharp path corners are mitred; helical paths
+  // need the Frenet frame so the section follows the twist.
+  const cfg = frenet ? { frenet: true } : { transitionMode: 'right', forceProfileSpineOthogonality: false };
   if (profile.outerWire) {
     let solid = R.genericSweep(profile.clone().outerWire(), spineWire.clone(), cfg);
     for (const w of profile.clone().innerWires()) solid = solid.cut(R.genericSweep(w, spineWire.clone(), cfg));
@@ -154,6 +155,40 @@ export function applyOp(base, tool, op) {
   if (op === 'cut') return base.cut(tool);
   if (op === 'intersect') return base.intersect(tool);
   throw new Error('Unknown operation ' + op);
+}
+
+// ---- helix / thread / half-space
+export function makeHelix({ pitch, height, radius, origin = [0, 0, 0], axis = [0, 0, 1], lefthand = false }) {
+  return R.makeHelix(pitch, height, radius, origin, V.norm(axis), lefthand);
+}
+
+export function sampleWire(wire, n) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) pts.push(v3(wire.pointAt(i / n)));
+  return pts;
+}
+
+// Solid to subtract for a V-thread around an axis. internal = thread inside a hole.
+export function threadTool({ origin, axis, radius, pitch, length, depth, internal = false, lefthand = false }) {
+  const a = V.norm(axis);
+  const helix = R.makeHelix(pitch, length, radius, origin, a, lefthand);
+  const p0 = v3(helix.startPoint);
+  const foot = V.add(origin, V.mul(a, V.dot(V.sub(p0, origin), a)));
+  const radial = V.norm(V.sub(p0, foot));
+  const s = internal ? 1 : -1; // apex direction: into the material
+  const h = pitch * 0.42;
+  const base = V.add(p0, V.mul(radial, -s * 0.05));
+  const tri = polygonFace([V.add(base, V.mul(a, h)), V.add(base, V.mul(a, -h)), V.add(p0, V.mul(radial, s * depth))]);
+  return R.genericSweep(tri.outerWire(), helix, { frenet: true });
+}
+
+// Big block covering the side the normal points AWAY from (cutting with it keeps the +normal side).
+export function halfSpace(point, normal, size) {
+  const n = V.norm(normal);
+  const ref = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1];
+  const u = V.norm(V.cross(ref, n)), w = V.cross(n, u);
+  const c = (i, j) => V.add(point, V.add(V.mul(u, i * size), V.mul(w, j * size)));
+  return R.basicFaceExtrusion(polygonFace([c(-1, -1), c(1, -1), c(1, 1), c(-1, 1)]), vec(V.mul(n, -size)));
 }
 
 export const makeBox = (a, b) => R.makeBox(a, b);
@@ -411,7 +446,11 @@ export function massProps(shape) {
   } catch (e) {
     /* ignore */
   }
-  out.bbox = bbox(shape);
+  try {
+    out.bbox = bbox(shape);
+  } catch (e) {
+    out.bbox = { min: [0, 0, 0], max: [0, 0, 0] };
+  }
   return out;
 }
 

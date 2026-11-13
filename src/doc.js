@@ -14,7 +14,7 @@ export const FEATURE_LABELS = {
   surfExtrude: 'Surface-Extrude', surfRevolve: 'Surface-Revolve', surfPlanar: 'Surface-Plane', surfLoft: 'Surface-Loft',
   surfSweep: 'Surface-Sweep', surfOffset: 'Surface-Offset', thicken: 'Thicken', knit: 'Surface-Knit', deleteBody: 'Body-Delete',
   baseFlange: 'Base-Flange', edgeFlange: 'Edge-Flange', structuralMember: 'Structural Member', mesh: 'Mesh', rib: 'Rib', text: 'Text',
-  primitive: 'Primitive', combine: 'Combine',
+  primitive: 'Primitive', combine: 'Combine', helix: 'Helix/Spiral', thread: 'Thread', cutPlane: 'Cut-With-Plane',
 };
 
 export function emptySketch() {
@@ -364,6 +364,7 @@ function revolveAxis(s, p) {
 
 function pathWire(st, id) {
   const s = sketchOf(st, id, 'path sketch');
+  if (s.wire) return s.wire;
   if (s.kind === '3d') {
     if (!s.chains.length) throw new Error('The 3D sketch has no connected path');
     return K.polylineWire(s.chains[0].pts, s.chains[0].closed);
@@ -404,7 +405,7 @@ function transformsFor(f, st) {
     const n = Math.max(1, p.count | 0);
     const total = +p.angle || 360;
     const step = Math.abs(total - 360) < 1e-9 ? 360 / n : total / Math.max(1, n - 1);
-    for (let i = 1; i < n; i++) list.push({ rotate: { angle: step * i, origin: p.axisO || [0, 0, 0], axis: V.norm(p.axisD || [0, 1, 0]) } });
+    for (let i = 1; i < n; i++) list.push({ rotate: { angle: step * i, origin: p.axisO || [0, 0, 0], axis: V.norm(p.axisD || [0, 0, 1]) } });
   } else if (f.type === 'mirror') {
     const pl = resolvePlane(p.plane, st);
     list.push({ mirror: { normal: pl.n, origin: pl.o } });
@@ -439,6 +440,32 @@ function runFeature(doc, f, st) {
       const pts = p.pts || [];
       const segs = (p.lines || []).filter(([i, j]) => pts[i] && pts[j]).map(([i, j]) => ({ a: pts[i], b: pts[j] }));
       st.sketches[f.id] = { kind: '3d', pts, segs, chains: chain3d(pts, p.lines || []) };
+      break;
+    }
+    case 'helix': {
+      if (!(+p.pitch > 0) || !(+p.height > 0) || !(+p.radius > 0)) throw new Error('Pitch, height and radius must be greater than zero');
+      const wire = K.makeHelix({ pitch: +p.pitch, height: +p.height, radius: +p.radius, origin: p.origin || [0, 0, 0], axis: p.axis || [0, 0, 1], lefthand: !!p.lefthand });
+      const turns = +p.height / +p.pitch;
+      const pts = K.sampleWire(wire, Math.min(4000, Math.max(24, Math.ceil(turns * 36))));
+      const segs = pts.slice(1).map((q, i) => ({ a: pts[i], b: q }));
+      st.sketches[f.id] = { kind: '3d', helix: true, wire, pts, segs, chains: [{ pts, closed: false }] };
+      break;
+    }
+    case 'thread': {
+      needSolid(st);
+      if (!(+p.pitch > 0) || !(+p.length > 0) || !(+p.depth > 0)) throw new Error('Pitch, length and depth must be greater than zero');
+      const a = V.norm(p.axis);
+      // start half a pitch outside the end face so the thread runs out cleanly
+      const tool = K.threadTool({ origin: V.add(p.origin, V.mul(a, -+p.pitch * 0.5)), axis: a, radius: +p.radius, pitch: +p.pitch, length: +p.length + +p.pitch * 0.5, depth: +p.depth, internal: !!p.internal, lefthand: !!p.lefthand });
+      setSolid(st, f, tool, 'cut');
+      break;
+    }
+    case 'cutPlane': {
+      needSolid(st);
+      const pl = resolvePlane(p.plane, st);
+      const n = p.flip ? V.neg(pl.n) : pl.n;
+      const tool = K.halfSpace(V.add(pl.o, V.mul(pl.n, +p.offset || 0)), V.neg(n), bboxDiag(st));
+      setSolid(st, f, tool, 'cut');
       break;
     }
     case 'plane': {
@@ -477,7 +504,8 @@ function runFeature(doc, f, st) {
       const s = sketchOf(st, p.profile, 'profile sketch');
       const spine = pathWire(st, p.path);
       const faces = requireFaces(s);
-      const tool = K.fuseAll(faces.map((fc) => K.sweepProfile(fc, spine)));
+      const frenet = !!(st.sketches[p.path] && st.sketches[p.path].helix);
+      const tool = K.fuseAll(faces.map((fc) => K.sweepProfile(fc, spine, { frenet })));
       setSolid(st, f, tool, p.op || 'add');
       break;
     }
@@ -559,7 +587,7 @@ function runFeature(doc, f, st) {
       needSolid(st);
       const t = {};
       if (p.translate) t.translate = p.translate;
-      if (p.angle) t.rotate = { angle: +p.angle, origin: p.origin || [0, 0, 0], axis: V.norm(p.axis || [0, 1, 0]) };
+      if (p.angle) t.rotate = { angle: +p.angle, origin: p.origin || [0, 0, 0], axis: V.norm(p.axis || [0, 0, 1]) };
       const moved = K.transformShape(st.solid, t);
       st.solid = p.copy ? st.solid.fuse(moved) : moved;
       break;
@@ -568,7 +596,7 @@ function runFeature(doc, f, st) {
       let tool;
       const o = p.origin || [0, 0, 0];
       if (p.kind === 'box') tool = K.makeBox(o, V.add(o, [+p.x, +p.y, +p.z]));
-      else if (p.kind === 'cylinder') tool = K.makeCylinder(+p.r, +p.h, o, [0, 1, 0]);
+      else if (p.kind === 'cylinder') tool = K.makeCylinder(+p.r, +p.h, o, [0, 0, 1]);
       else tool = K.makeSphere(+p.r).translate(o);
       setSolid(st, f, tool, p.op || 'add');
       break;

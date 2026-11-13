@@ -464,7 +464,7 @@ register('simStudy', () => {
     pm.setMessage('Solving… 0%');
     const t0 = performance.now();
     try {
-      result = await solveStatic({ positions, fixedTris, loads, gravity: v.gravity ? [0, -9.81, 0] : null, material: mat, resolution: Math.round(v.resolution) }, (f, msg) => pmActive() === pm && pm.setMessage(`Solving… ${Math.round(f * 100)}% ${msg || ''}`));
+      result = await solveStatic({ positions, fixedTris, loads, gravity: v.gravity ? [0, 0, -9.81] : null, material: mat, resolution: Math.round(v.resolution) }, (f, msg) => pmActive() === pm && pm.setMessage(`Solving… ${Math.round(f * 100)}% ${msg || ''}`));
     } catch (e) {
       console.error(e);
       result = { ok: false, message: 'The solver failed: ' + (e.message || e) };
@@ -488,8 +488,8 @@ register('simStudy', () => {
       { key: 'fixed', label: 'Fixed faces', group: 'Fixtures', type: 'sel', accept: ['face'], placeholder: 'Faces that cannot move' },
       { key: 'loaded', label: 'Loaded faces', group: 'External Loads', type: 'sel', accept: ['face'], placeholder: 'Faces the force acts on' },
       { key: 'force', label: 'Total force (N)', group: 'External Loads', type: 'number' },
-      { key: 'dir', label: 'Direction', group: 'External Loads', type: 'select', options: [['normal', 'Normal to face (pushing)'], ['x', '+X'], ['-x', '−X'], ['y', '+Y'], ['-y', '−Y (down)'], ['z', '+Z'], ['-z', '−Z']] },
-      { key: 'gravity', label: 'Include gravity (−Y)', group: 'External Loads', type: 'check' },
+      { key: 'dir', label: 'Direction', group: 'External Loads', type: 'select', options: [['normal', 'Normal to face (pushing)'], ['x', '+X'], ['-x', '−X'], ['y', '+Y'], ['-y', '−Y'], ['z', '+Z'], ['-z', '−Z (down)']] },
+      { key: 'gravity', label: 'Include gravity (−Z)', group: 'External Loads', type: 'check' },
       { key: 'resolution', label: 'Mesh density', group: 'Mesh', type: 'number', min: 8, max: 64, step: 2 },
       { key: 'run', group: 'Run', type: 'buttons', buttons: [{ label: '▶ Run study', primary: true, action: (pm) => runStudy(pm) }, { label: 'Hide results', action: () => clearSim() }] },
       { key: 'plot', label: 'Plot', group: 'Results', type: 'select', options: [['stress', 'von Mises stress'], ['disp', 'Displacement']] },

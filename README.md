@@ -17,8 +17,8 @@ faces, and a drawing sheet with a title block.
 
 | Area | Capabilities |
 |---|---|
-| **Sketch** | Line, centerline, corner/center rectangle, circle, 3-point and centerpoint arc, polygon, slot, spline, point, text (any TTF/OTF font, incl. Mongolian Cyrillic). Snapping and automatic relations, 14 relation types solved by a real geometric constraint solver, driving smart dimensions, drag-to-solve, under/fully-defined status, trim, sketch fillet, offset, mirror, linear/circular pattern, convert entities, construction geometry, insert DXF/SVG. |
-| **Features** | Extruded boss/cut (blind, mid-plane, through all, two-direction, draft, thin wall), revolved boss/cut, swept boss/cut, lofted boss/cut, hole wizard (simple, counterbore, countersink), fillet, chamfer, shell, draft, linear/circular pattern, mirror, reference planes, 3D sketch, scale, move/copy body, primitives. Full history: edit, suppress, roll back, reorder by deleting/re-adding, undo/redo. |
+| **Sketch** | Line, centerline, corner/center rectangle, circle, 3-point and centerpoint arc, polygon, slot, spline, point, text (any TTF/OTF font, incl. Mongolian Cyrillic). Snapping and automatic relations, 14 relation types solved by a real geometric constraint solver, driving smart dimensions, drag-to-solve, under/fully-defined status, trim, sketch fillet and chamfer, offset, mirror, linear/circular pattern, convert entities, construction geometry, insert DXF/SVG. |
+| **Features** | Extruded boss/cut (blind, mid-plane, through all, two-direction, draft, thin wall), revolved boss/cut, swept boss/cut, lofted boss/cut, hole wizard (simple, counterbore, countersink), helix/spiral paths (springs, coils), real helical threads, cut with plane, fillet, chamfer, shell, draft, linear/circular pattern, mirror, reference planes, 3D sketch, scale, move/copy body, primitives. Full history: edit, suppress, roll back, reorder by deleting/re-adding, undo/redo. |
 | **Surfaces** | Extruded, revolved, swept, lofted, planar and offset surfaces, knit, thicken, delete body. |
 | **Sheet metal** | Base flange (plate or open profile), edge flange with bend radius, K-factor bend allowance, flat pattern with bend lines, flat-pattern DXF. |
 | **Weldments** | Structural members along 2D or 3D sketch lines (square/rectangular tube, pipe, angle, flat, C channel, I beam, round/square bar) with automatic mitres, cut list with CSV export. |
@@ -27,6 +27,7 @@ faces, and a drawing sheet with a title block.
 | **Simulation** | Linear static stress study (fixtures, forces, gravity) with von Mises and displacement plots, deformed shape and factor of safety. Validated against beam theory (see `tests/fea.test.mjs`). |
 | **Render** | Physically based appearances and procedural textures, per-face colours, scene/background, floor shadows, high-resolution PNG output. |
 | **Drawing** | Sheet formats (title blocks), standard 3 view (first or third angle), any model view with hidden-line removal, per-view scale, smart dimensions, notes, centre marks, title-block properties. Vector export to **PDF** (font embedded), **DXF** and **SVG**. |
+| **Viewport** | Z-up model space, named reference planes that glow on hover, glowing selection, build flash, turntable, animated simulation results; all motion can be switched off. |
 | **Devices** | Mouse, trackpad and touch (one finger rotates, two fingers pan/zoom), responsive layout, installable as a PWA and usable offline after the first load. |
 
 ### File formats

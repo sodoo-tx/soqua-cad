@@ -12,10 +12,11 @@ import * as K from '../kernel.js';
 
 const BASE = import.meta.env.BASE_URL;
 const VIEWDEF = {
-  front: { dir: [0, 0, -1], x: [1, 0, 0], label: 'Front' }, back: { dir: [0, 0, 1], x: [-1, 0, 0], label: 'Back' },
-  right: { dir: [-1, 0, 0], x: [0, 0, -1], label: 'Right' }, left: { dir: [1, 0, 0], x: [0, 0, 1], label: 'Left' },
-  top: { dir: [0, -1, 0], x: [1, 0, 0], label: 'Top' }, bottom: { dir: [0, 1, 0], x: [1, 0, 0], label: 'Bottom' },
-  iso: { dir: [-1, -1, -1], x: [1, 0, -1], label: 'Isometric' },
+  // Z up (same convention as the 3D view)
+  front: { dir: [0, 1, 0], x: [1, 0, 0], label: 'Front' }, back: { dir: [0, -1, 0], x: [-1, 0, 0], label: 'Back' },
+  right: { dir: [-1, 0, 0], x: [0, 1, 0], label: 'Right' }, left: { dir: [1, 0, 0], x: [0, -1, 0], label: 'Left' },
+  top: { dir: [0, 0, -1], x: [1, 0, 0], label: 'Top' }, bottom: { dir: [0, 0, 1], x: [1, 0, 0], label: 'Bottom' },
+  iso: { dir: [-1, 1, -1], x: [1, 1, 0], label: 'Isometric' },
 };
 const SCALES = [50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005];
 const scaleText = (s) => (s >= 1 ? `${fmt(s)}:1` : `1:${fmt(1 / s)}`);

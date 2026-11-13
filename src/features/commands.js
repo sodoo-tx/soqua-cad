@@ -174,7 +174,7 @@ D.linearPattern = {
     { key: 'spacing2', label: 'Spacing (mm)', group: 'Direction 2', type: 'number' }, { key: 'count2', label: 'Instances', group: 'Direction 2', type: 'number', min: 1, step: 1 },
     FEATS,
   ],
-  init: () => ({ dirSel: sel('edge').slice(0, 1), axis: 'x', spacing: 20, count: 3, axis2: 'z', spacing2: 20, count2: 1, features: app.selection.filter((i) => i.kind === 'feature').map((i) => featItem(i.id)) }),
+  init: () => ({ dirSel: sel('edge').slice(0, 1), axis: 'x', spacing: 20, count: 3, axis2: 'y', spacing2: 20, count2: 1, features: app.selection.filter((i) => i.kind === 'feature').map((i) => featItem(i.id)) }),
   fromParams: (p) => ({ dirSel: [], axis: axisName(p.dir), spacing: p.spacing, count: p.count, axis2: axisName(p.dir2), spacing2: p.spacing2 || 20, count2: p.count2 || 1, features: (p.features || []).map(featItem).filter(Boolean), keepDir: p.dir }),
   toParams: (v) => ({ dir: dirOf(v.dirSel[0]) || (v.keepDir && axisName(v.keepDir) === v.axis ? v.keepDir : axisVec(v.axis)), spacing: v.spacing, count: Math.round(v.count), dir2: axisVec(v.axis2), spacing2: v.spacing2, count2: Math.round(v.count2), features: ids(v.features) }),
 };
@@ -188,11 +188,11 @@ D.circularPattern = {
   title: 'Circular Pattern', icon: 'cpattern',
   fields: [
     { key: 'axisSel', label: 'Pattern axis', group: 'Parameters', type: 'sel', accept: ['edge'], multi: false, placeholder: 'Circular edge or straight edge (or use the axis below)' },
-    { key: 'axis', label: 'Axis through origin', group: 'Parameters', type: 'select', options: [['y', 'Y'], ['x', 'X'], ['z', 'Z']], show: (v) => !v.axisSel.length },
+    { key: 'axis', label: 'Axis through origin', group: 'Parameters', type: 'select', options: [['z', 'Z'], ['x', 'X'], ['y', 'Y']], show: (v) => !v.axisSel.length },
     { key: 'angle', label: 'Total angle (°)', group: 'Parameters', type: 'number' }, { key: 'count', label: 'Instances', group: 'Parameters', type: 'number', min: 1, step: 1 },
     FEATS,
   ],
-  init: () => ({ axisSel: sel('edge').slice(0, 1), axis: 'y', angle: 360, count: 6, features: app.selection.filter((i) => i.kind === 'feature').map((i) => featItem(i.id)) }),
+  init: () => ({ axisSel: sel('edge').slice(0, 1), axis: 'z', angle: 360, count: 6, features: app.selection.filter((i) => i.kind === 'feature').map((i) => featItem(i.id)) }),
   fromParams: (p) => ({ axisSel: [], axis: axisName(p.axisD), angle: p.angle, count: p.count, features: (p.features || []).map(featItem).filter(Boolean), keep: { o: p.axisO, d: p.axisD } }),
   toParams: (v) => {
     const e = v.axisSel[0];
@@ -235,7 +235,7 @@ D.moveBody = {
     { key: 'axis', label: 'Rotation axis', group: 'Rotate', type: 'select', options: [['x', 'X'], ['y', 'Y'], ['z', 'Z']] }, { key: 'angle', label: 'Angle (°)', group: 'Rotate', type: 'number' },
     { key: 'copy', label: 'Copy (keep the original and merge)', group: 'Options', type: 'check' },
   ],
-  init: () => ({ translate: [0, 0, 0], axis: 'y', angle: 0, copy: false }),
+  init: () => ({ translate: [0, 0, 0], axis: 'z', angle: 0, copy: false }),
   fromParams: (p) => ({ translate: [...(p.translate || [0, 0, 0])], axis: axisName(p.axis), angle: p.angle || 0, copy: !!p.copy }),
   toParams: (v) => ({ translate: [...v.translate], axis: axisVec(v.axis), angle: v.angle, copy: v.copy }),
 };
@@ -344,6 +344,76 @@ D.deleteBody = {
   },
 };
 
+// ---- helix / thread / cut with plane
+const AX = [['z', 'Z'], ['x', 'X'], ['y', 'Y'], ['-z', '-Z'], ['-x', '-X'], ['-y', '-Y']];
+const circEdge = () => sel('edge').filter((e) => e.info && e.info.radius).slice(0, 1);
+const axisOpt = (d) => (['x', 'y', 'z', '-x', '-y', '-z'].find((n) => V.dist(axisVec(n), V.norm(d)) < 1e-6) || 'custom');
+D.helix = {
+  title: 'Helix/Spiral', icon: 'helix',
+  message: 'Creates a helical path for Swept Boss/Cut (springs, threads, coils). Pick a circular edge to wrap around it, or type the axis and radius. The helix starts on the +X side of the axis: sketch the sweep profile there.',
+  fields: [
+    { key: 'edge', label: 'Circular edge', group: 'Defined By', type: 'sel', accept: ['edge'], multi: false, autoFocus: false, placeholder: 'Optional: circular edge to wrap around' },
+    { key: 'axis', label: 'Axis', group: 'Defined By', type: 'select', options: [...AX, ['custom', 'As picked']], show: (v) => !v.edge.length },
+    { key: 'origin', label: 'Start X Y Z', group: 'Defined By', type: 'vec', wide: true, show: (v) => !v.edge.length },
+    { key: 'radius', label: 'Radius (mm)', group: 'Parameters', type: 'number', min: 0, show: (v) => !v.edge.length },
+    { key: 'pitch', label: 'Pitch (mm)', group: 'Parameters', type: 'number', min: 0 },
+    { key: 'height', label: 'Height (mm)', group: 'Parameters', type: 'number', min: 0 },
+    { key: 'reverse', label: 'Reverse direction', group: 'Parameters', type: 'check', show: (v) => !!v.edge.length },
+    { key: 'lefthand', label: 'Counter-clockwise (left hand)', group: 'Parameters', type: 'check' },
+  ],
+  init: () => ({ edge: circEdge(), axis: 'z', origin: [0, 0, 0], radius: 10, pitch: 5, height: 30, reverse: false, lefthand: false }),
+  fromParams: (p) => ({ edge: [], axis: axisOpt(p.axis), keepAxis: p.axis, origin: [...p.origin], radius: p.radius, pitch: p.pitch, height: p.height, reverse: false, lefthand: !!p.lefthand }),
+  toParams: (v) => {
+    const e = v.edge[0];
+    if (e && !e.info.radius) return null;
+    const axis = e ? (v.reverse ? V.neg(e.info.axis) : e.info.axis) : v.axis === 'custom' ? v.keepAxis || [0, 0, 1] : axisVec(v.axis);
+    return { origin: e ? e.info.center : [...v.origin], axis, radius: e ? e.info.radius : v.radius, pitch: v.pitch, height: v.height, lefthand: v.lefthand };
+  },
+};
+D.thread = {
+  title: 'Thread', icon: 'thread',
+  message: 'Cuts a real helical V-thread. Pick the circular edge where the thread starts (end of a shaft, or the mouth of a hole) and tick "Internal" for a hole.',
+  fields: [
+    { key: 'edge', label: 'Start edge', group: 'Thread Location', type: 'sel', accept: ['edge'], multi: false, placeholder: 'Circular edge of the shaft or hole' },
+    { key: 'internal', label: 'Internal thread (in a hole)', group: 'Thread Location', type: 'check' },
+    { key: 'reverse', label: 'Reverse direction', group: 'Thread Location', type: 'check' },
+    { key: 'pitch', label: 'Pitch (mm)', group: 'Specification', type: 'number', min: 0 },
+    { key: 'length', label: 'Thread length (mm)', group: 'Specification', type: 'number', min: 0 },
+    { key: 'depth', label: 'Thread depth (mm)', group: 'Specification', type: 'number', min: 0 },
+    { key: 'lefthand', label: 'Left-hand thread', group: 'Specification', type: 'check' },
+  ],
+  init: () => ({ edge: circEdge(), internal: false, reverse: false, pitch: 1.5, length: 15, depth: 0.9, lefthand: false }),
+  fromParams: (p) => ({ edge: [], keep: { origin: p.origin, axis: p.axis, radius: p.radius }, internal: !!p.internal, reverse: false, pitch: p.pitch, length: p.length, depth: p.depth, lefthand: !!p.lefthand }),
+  toParams: (v) => {
+    const e = v.edge[0];
+    let o, a, r;
+    if (e && e.info.radius) (o = e.info.center), (a = e.info.axis), (r = e.info.radius);
+    else if (v.keep) (o = v.keep.origin), (a = v.keep.axis), (r = v.keep.radius);
+    else return null;
+    // the thread must run into the material: aim the axis from the edge towards the body
+    if (e && app.doc.state.solid) {
+      const b = K.bbox(app.doc.state.solid);
+      const mid = V.lerp(b.min, b.max, 0.5);
+      if (V.dot(V.sub(mid, o), a) < 0) a = V.neg(a);
+    }
+    if (v.reverse) a = V.neg(a);
+    return { origin: o, axis: a, radius: r, pitch: v.pitch, length: v.length, depth: v.depth, internal: v.internal, lefthand: v.lefthand };
+  },
+};
+D.cutPlane = {
+  title: 'Cut With Plane', icon: 'section',
+  message: 'Removes everything on one side of a plane or flat face.',
+  fields: [
+    { key: 'plane', label: 'Cutting plane', group: 'Selections', type: 'sel', accept: ['plane', 'face'], multi: false },
+    { key: 'offset', label: 'Offset (mm)', group: 'Selections', type: 'number' },
+    { key: 'flip', label: 'Flip cut (remove the other side)', group: 'Selections', type: 'check' },
+  ],
+  init: () => ({ plane: selPlane() ? [selPlane()] : [], offset: 0, flip: false }),
+  fromParams: (p) => ({ plane: planeItem(p.plane), offset: p.offset || 0, flip: !!p.flip }),
+  toParams: (v) => (v.plane.length && v.plane[0].planeSpec ? { plane: v.plane[0].planeSpec, offset: v.offset, flip: v.flip } : null),
+  onOpen: () => app.vp.setShowPlanes(true),
+};
+
 // 3D sketch: table of points joined into a polyline
 D.sketch3d = {
   title: '3DSketch', icon: 'sketch3d', message: 'Type coordinates or click model vertices to add points. Consecutive points are joined by lines (use it for sweep paths and weldment frames).',
@@ -352,7 +422,7 @@ D.sketch3d = {
     { key: 'table', group: 'Points', type: 'custom', render: (pm) => pointsTable(pm) },
     { key: 'closed', label: 'Close the loop', group: 'Points', type: 'check' },
   ],
-  init: () => ({ pick: [], pts: [[0, 0, 0], [0, 100, 0], [100, 100, 0]], closed: false }),
+  init: () => ({ pick: [], pts: [[0, 0, 0], [0, 0, 100], [100, 0, 100]], closed: false }),
   fromParams: (p) => ({ pick: [], pts: p.pts.map((q) => [...q]), closed: p.lines.length === p.pts.length && p.pts.length > 2 }),
   toParams: (v) => {
     const pts = v.pts.filter((q) => q.every(Number.isFinite));
@@ -408,6 +478,7 @@ function openFeature(type, defKey, editId) {
   if (!def.title) return toast('No dialog for ' + type, true);
   const doc = app.doc;
   if (def.prepare) def.prepare(def);
+  if (def.onOpen) def.onOpen();
   const before = doc.snapshot();
   const undoLen = doc._undo.length;
   let fid = editId || null;
@@ -466,6 +537,7 @@ function openFeature(type, defKey, editId) {
       if (f && f.error) toast(`${f.name}: ${f.error}`, true);
       setSelection([]);
     },
+    onClose: () => def.onOpen && app.vp.setShowPlanes(false),
     onCancel: () => {
       clearTimeout(timer);
       if (created || (editing && doc._undo.length !== undoLen)) {
@@ -503,7 +575,7 @@ feat('sweep', 'sweep');
 feat('sweepCut', 'sweep', 'sweepCut');
 feat('loft', 'loft');
 feat('loftCut', 'loft', 'loftCut');
-for (const t of ['fillet', 'chamfer', 'shell', 'draft', 'linearPattern', 'circularPattern', 'mirror', 'plane', 'scale', 'moveBody', 'primitive', 'surfExtrude', 'surfRevolve', 'surfSweep', 'surfLoft', 'surfPlanar', 'surfOffset', 'thicken', 'knit', 'baseFlange', 'edgeFlange', 'structuralMember', 'deleteBody', 'sketch3d']) feat(t, t);
+for (const t of ['fillet', 'chamfer', 'shell', 'draft', 'linearPattern', 'circularPattern', 'mirror', 'plane', 'scale', 'moveBody', 'primitive', 'surfExtrude', 'surfRevolve', 'surfSweep', 'surfLoft', 'surfPlanar', 'surfOffset', 'thicken', 'knit', 'baseFlange', 'edgeFlange', 'structuralMember', 'deleteBody', 'sketch3d', 'helix', 'thread', 'cutPlane']) feat(t, t);
 
 const DEF_FOR = (f) => {
   const p = f.params;

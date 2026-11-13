@@ -234,3 +234,8 @@ body.no-anim *, body.no-anim *::before, body.no-anim *::after { animation: none 
 @media (prefers-reduced-motion: reduce) {
   body:not(.anim-forced) .brand-mark.big, body:not(.anim-forced) .rollbar, body:not(.anim-forced) .selbox.active, body:not(.anim-forced) #corner .ok { animation: none; }
 }
+
+/* plane name labels + glow */
+.planelabel { position: absolute; transform: translate(4px, 4px); font-size: 11px; color: #2f5fb8; background: rgba(255,255,255,.55); padding: 0 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; user-select: none; transition: color .15s ease, background .15s ease, box-shadow .15s ease, transform .15s ease; }
+.planelabel.sel { color: #0b63c4; background: rgba(214,235,255,.9); font-weight: 600; }
+.planelabel.hot { color: #b85a00; background: rgba(255,244,224,.95); font-weight: 600; box-shadow: 0 0 10px 2px rgba(255,138,0,.55); transform: translate(4px, 4px) scale(1.12); transform-origin: left top; }

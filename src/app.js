@@ -41,6 +41,7 @@ const RIBBON = {
     ['extrudeCut', 'Extruded Cut', 'cut'], ['revolveCut', 'Revolved Cut', 'revolvecut'], ['sweepCut', 'Swept Cut', 'sweep'], ['loftCut', 'Lofted Cut', 'loft'], ['hole', 'Hole Wizard', 'hole'], '|',
     ['fillet', 'Fillet', 'fillet'], ['chamfer', 'Chamfer', 'chamfer'], ['shell', 'Shell', 'shell'], ['draft', 'Draft', 'draft'], '|',
     ['linearPattern', 'Linear Pattern', 'lpattern'], ['circularPattern', 'Circular Pattern', 'cpattern'], ['mirror', 'Mirror', 'mirror3d'], '|',
+    ['helix', 'Helix and Spiral', 'helix'], ['thread', 'Thread', 'thread'], ['cutPlane', 'Cut With Plane', 'section'], '|',
     ['plane', 'Reference Plane', 'plane'], ['sketch3d', '3D Sketch', 'sketch3d'], ['scale', 'Scale', 'scale'], ['moveBody', 'Move/Copy Body', 'move'], ['primitive', 'Primitive', 'primitive'],
   ],
   Sketch: [
@@ -49,7 +50,7 @@ const RIBBON = {
     ['sk:line', 'Line', 'line'], ['sk:centerline', 'Centerline', 'centerline'], ['sk:rect', 'Corner Rectangle', 'rect'], ['sk:crect', 'Center Rectangle', 'crect'],
     ['sk:circle', 'Circle', 'circle'], ['sk:arc3', '3 Point Arc', 'arc3'], ['sk:arcc', 'Centerpoint Arc', 'arcc'], ['sk:polygon', 'Polygon', 'polygon'], ['sk:slot', 'Straight Slot', 'slot'],
     ['sk:spline', 'Spline', 'spline'], ['sk:point', 'Point', 'point'], ['sk:text', 'Text', 'text'], '|',
-    ['sk:trim', 'Trim Entities', 'trim'], ['sk:sfillet', 'Sketch Fillet', 'sfillet'], ['skOffset', 'Offset Entities', 'offset'], ['skConvert', 'Convert Entities', 'convert'],
+    ['sk:trim', 'Trim Entities', 'trim'], ['sk:sfillet', 'Sketch Fillet', 'sfillet'], ['sk:schamfer', 'Sketch Chamfer', 'chamfer'], ['skOffset', 'Offset Entities', 'offset'], ['skConvert', 'Convert Entities', 'convert'],
     ['skMirror', 'Mirror Entities', 'mirror'], ['skLinear', 'Linear Sketch Pattern', 'lpattern'], ['skCircular', 'Circular Sketch Pattern', 'cpattern'], '|',
     ['skRelation', 'Add Relation', 'relation'], ['skConstruction', 'Construction Geometry', 'construction'], ['skImportDXF', 'Insert DXF/SVG', 'dxf'],
   ],
@@ -364,13 +365,16 @@ export function buildTree() {
   row('', icon('material'), `Material <${doc.material}>`, { dbl: () => run('material'), ctx: (e) => popup([{ label: 'Edit Material…', icon: 'material', action: () => run('material') }], e.clientX, e.clientY) });
   for (const name of ['Front', 'Top', 'Right']) {
     const key = 'p' + name + ' Plane';
-    row(selKeys.has(key) ? 'sel' : '', icon('plane'), name + ' Plane', {
+    const planeRow = row(selKeys.has(key) ? 'sel' : '', icon('plane'), name + ' Plane', {
       click: (e) => pickFromTree({ kind: 'plane', name: name + ' Plane', plane: BASE_PLANES[name], spec: { type: 'base', name } }, e),
       ctx: (e) => {
         pickFromTree({ kind: 'plane', name: name + ' Plane', plane: BASE_PLANES[name], spec: { type: 'base', name } });
         popup([{ label: 'Sketch', icon: 'sketch', action: () => run('sketch') }, { label: 'Normal To', icon: 'normal', action: () => run('normalTo') }], e.clientX, e.clientY);
       },
     });
+    // hovering a plane in the tree lights it up in the graphics area
+    planeRow.addEventListener('mouseenter', () => !app.sketcher && app.vp.setHover({ kind: 'plane', name: name + ' Plane', plane: BASE_PLANES[name], spec: { type: 'base', name } }));
+    planeRow.addEventListener('mouseleave', () => !app.sketcher && app.vp.setHover(null));
   }
   row('', icon('origin'), 'Origin');
   const children = new Map();

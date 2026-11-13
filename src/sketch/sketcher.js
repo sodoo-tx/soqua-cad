@@ -240,6 +240,7 @@ export class Sketcher {
       circle: 'Circle: click the center, then a point on the circle.', arc3: '3-point arc: click start, end, then a point on the arc.', arcc: 'Centerpoint arc: click center, start, then end.',
       polygon: 'Polygon: click the center, then a vertex.', slot: 'Straight slot: click the two centers, then drag out the width.', spline: 'Spline: click through-points; double-click to finish.',
       point: 'Point: click to place.', dimension: 'Smart Dimension: click a line, circle, arc or two points/lines, then click to place the dimension.',
+      schamfer: 'Sketch chamfer: click a corner where two lines meet.',
       trim: 'Trim: click the part of an entity you want to remove.', sfillet: 'Sketch fillet: click a corner where two lines meet.', text: 'Text: click where the text starts.',
     };
     setHint(hints[t] || t);
@@ -580,6 +581,9 @@ export class Sketcher {
       case 'sfillet':
         await this.filletAt(s);
         break;
+      case 'schamfer':
+        await this.chamferAt(s);
+        break;
     }
     this.redrawPreview();
   }
@@ -858,6 +862,30 @@ export class Sketcher {
         if (hi < total) this.sk.ents.push({ id: uid('e'), type: 'arc', c: e.c, a: this.addPt(...at(hi)), b: e.b, construction: e.construction });
       }
     }
+    this.cleanup();
+    this.changed();
+  }
+  async chamferAt(s) {
+    if (!s.pt) return toast('Click the corner point shared by two lines.');
+    const lines = this.sk.ents.filter((e) => e.type === 'line' && (e.a === s.pt || e.b === s.pt));
+    if (lines.length !== 2) return toast('A sketch chamfer needs a corner where exactly two lines meet.');
+    const dist = parseFloat(await promptDlg('Sketch Chamfer', 'Chamfer distance (mm):', String(this.lastChamfer || 5)));
+    if (!(dist > 0)) return;
+    this.lastChamfer = dist;
+    const V0 = this.P(s.pt);
+    const other = (l) => this.P(l.a === s.pt ? l.b : l.a);
+    const len = (l) => Math.hypot(...sub2(other(l), V0));
+    if (dist >= len(lines[0]) || dist >= len(lines[1])) return toast('The distance is too large for this corner.', true);
+    this.checkpoint();
+    const ids = lines.map((l) => {
+      const dir = norm2(sub2(other(l), V0));
+      const p = this.addPt(V0[0] + dir[0] * dist, V0[1] + dir[1] * dist);
+      if (l.a === s.pt) l.a = p;
+      else l.b = p;
+      return p;
+    });
+    const cut = this.addEnt({ type: 'line', a: ids[0], b: ids[1] });
+    cut.construction = false;
     this.cleanup();
     this.changed();
   }

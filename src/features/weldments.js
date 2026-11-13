@@ -61,7 +61,7 @@ export function buildStructuralMembers(s, p) {
       joints.get(k).push({ i, end });
     }
   });
-  const upRef = s.kind === '3d' ? [0, 1, 0] : s.plane.n;
+  const upRef = s.kind === '3d' ? [0, 0, 1] : s.plane.n;
   const solids = [], cutlist = [];
   segs.forEach((g, i) => {
     const len = V.dist(g.a, g.b);

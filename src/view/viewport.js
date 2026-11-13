@@ -10,10 +10,11 @@ import { sketchSegments, segPoints } from '../sketch/profile.js';
 
 const HOVER = 0xff8a00, SELECT = 0x1e8fff;
 export const VIEWS = {
-  front: { dir: [0, 0, -1], up: [0, 1, 0] }, back: { dir: [0, 0, 1], up: [0, 1, 0] },
-  left: { dir: [1, 0, 0], up: [0, 1, 0] }, right: { dir: [-1, 0, 0], up: [0, 1, 0] },
-  top: { dir: [0, -1, 0], up: [0, 0, -1] }, bottom: { dir: [0, 1, 0], up: [0, 0, 1] },
-  iso: { dir: [-1, -1, -1], up: [0, 1, 0] }, dimetric: { dir: [-1, -0.6, -1.6], up: [0, 1, 0] }, trimetric: { dir: [-1.2, -0.8, -2], up: [0, 1, 0] },
+  // Z up: the front view looks along +Y
+  front: { dir: [0, 1, 0], up: [0, 0, 1] }, back: { dir: [0, -1, 0], up: [0, 0, 1] },
+  left: { dir: [1, 0, 0], up: [0, 0, 1] }, right: { dir: [-1, 0, 0], up: [0, 0, 1] },
+  top: { dir: [0, 0, -1], up: [0, 1, 0] }, bottom: { dir: [0, 0, 1], up: [0, -1, 0] },
+  iso: { dir: [-1, 1, -1], up: [0, 0, 1] }, dimetric: { dir: [-1, 1.6, -0.6], up: [0, 0, 1] }, trimetric: { dir: [-1.2, 2, -0.8], up: [0, 0, 1] },
 };
 
 export class Viewport {
@@ -96,6 +97,7 @@ export class Viewport {
     this.light.position.copy(c.position).add(new THREE.Vector3(-0.5, 0.9, 0).applyQuaternion(this.quat).multiplyScalar(D * 0.6));
     this.light.target.position.copy(this.target);
     this.render();
+    if (this.groups) this.updatePlaneLabels();
     if (this.onCamera) this.onCamera();
   }
   pxSize() {
@@ -147,7 +149,7 @@ export class Viewport {
       const b = new THREE.Box3().setFromObject(g);
       if (!b.isEmpty()) box.union(b);
     }
-    if (box.isEmpty()) box.set(new THREE.Vector3(-100, -100, -100), new THREE.Vector3(100, 100, 100));
+    if (box.isEmpty()) box.set(new THREE.Vector3(-95, -95, -95), new THREE.Vector3(95, 95, 95)); // empty part: frame the three default planes
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     this.modelSize = Math.max(10, sphere.radius * 2);
     const a = this.w / this.h;
@@ -329,7 +331,7 @@ export class Viewport {
       if (this.turntable) {
         const dt = this._ttLast ? Math.min(60, t - this._ttLast) : 16;
         this._ttLast = t;
-        this.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.00055)).normalize();
+        this.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dt * 0.00055)).normalize();
         this.updateCamera();
         alive = true;
       } else this._ttLast = 0;
@@ -415,9 +417,8 @@ export class Viewport {
     if (!this.floorOn || !box || box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3()).length() * 4;
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.ShadowMaterial({ opacity: 0.28 }));
-    floor.rotation.x = -Math.PI / 2;
     const c = box.getCenter(new THREE.Vector3());
-    floor.position.set(c.x, box.min.y - 0.01, c.z);
+    floor.position.set(c.x, c.y, box.min.z - 0.01);
     floor.receiveShadow = true;
     this.groups.floor.add(floor);
     const s = size / 3;
@@ -477,9 +478,11 @@ export class Viewport {
   }
 
   buildPlanes(doc) {
+    for (const old of this.groups.planes.children) if (old.userData.label) old.userData.label.remove();
     this.disposeGroup(this.groups.planes);
     this.planeObjs = [];
     const size = Math.max(60, this.modelSize * 0.6);
+    this.planeSize = size;
     const add = (name, pl, spec, color) => {
       const y = planeY(pl);
       const c = (a, b) => V.add(pl.o, V.add(V.mul(pl.x, a * size), V.mul(y, b * size)));
@@ -491,7 +494,11 @@ export class Viewport {
       outline.material.depthTest = true;
       const g = new THREE.Group();
       g.add(mesh, outline);
-      g.userData = { plane: pl, spec, name };
+      const label = document.createElement('div');
+      label.className = 'planelabel';
+      label.textContent = name;
+      this.labels.append(label);
+      g.userData = { plane: pl, spec, name, corner: p[3], ring: [...p[0], ...p[1], ...p[1], ...p[2], ...p[2], ...p[3], ...p[3], ...p[0]], label, color };
       mesh.userData = g.userData;
       this.groups.planes.add(g);
       this.planeObjs.push(mesh);
@@ -507,9 +514,27 @@ export class Viewport {
     for (const g of this.groups.planes.children) {
       const isRef = g.userData.spec.type === 'feature';
       const sel = this.selection.some((s) => s.kind === 'plane' && s.name === g.userData.name);
-      g.visible = this.showPlanes || sel || isRef || (empty && !this.tool);
+      const hot = !!this.hover && this.hover.kind === 'plane' && this.hover.name === g.userData.name;
+      g.visible = this.showPlanes || sel || hot || isRef || (empty && !this.tool);
+      const lab = g.userData.label;
+      if (lab) {
+        lab.style.display = g.visible ? '' : 'none';
+        lab.classList.toggle('hot', hot);
+        lab.classList.toggle('sel', sel);
+      }
     }
+    this.updatePlaneLabels();
     this.render();
+  }
+  // plane names sit at the top-left corner of each visible plane, like in the reference CAD systems
+  updatePlaneLabels() {
+    for (const g of this.groups.planes.children) {
+      const lab = g.userData.label;
+      if (!lab || !g.visible) continue;
+      const s = this.project(g.userData.corner);
+      lab.style.left = s[0] + 'px';
+      lab.style.top = s[1] + 'px';
+    }
   }
   setShowPlanes(v) {
     this.showPlanes = v;
@@ -638,6 +663,22 @@ export class Viewport {
       const p = new THREE.Points(geo, new THREE.PointsMaterial({ color, size: 10, sizeAttenuation: false, depthTest: false }));
       p.renderOrder = 11;
       return p;
+    }
+    if (h.kind === 'plane') {
+      // glowing plane: brighter fill plus a soft halo around its border
+      const src = this.groups.planes.children.find((p) => p.userData.name === h.name);
+      if (!src) return null;
+      const grp = new THREE.Group();
+      const fill = new THREE.Mesh(src.children[0].geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+      fill.userData.shared = true;
+      fill.userData.pulse = [0.12, 0.2];
+      fill.renderOrder = 4;
+      const halo = this.fat(src.userData.ring, color, 12);
+      halo.material.opacity = 0.2;
+      halo.userData.pulse = [0.1, 0.24];
+      const core = this.fat(src.userData.ring, color, 2.6);
+      grp.add(fill, halo, core);
+      return grp;
     }
     if (h.kind === 'mesh') {
       const src = this.pickables.find((m) => m.userData.body === h.body);
@@ -857,7 +898,9 @@ export class Viewport {
       r.setViewport(4, 16, 84, 84);
       this.triadCam.position.set(0, 0, 4).applyQuaternion(this.quat);
       this.triadCam.quaternion.copy(this.quat);
+      r.autoClear = false; // draw the triad over the scene instead of wiping its corner
       r.render(this.triadScene, this.triadCam);
+      r.autoClear = true;
       r.setScissorTest(false);
     }
   }

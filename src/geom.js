@@ -1,5 +1,5 @@
-// Small vector / plane helpers shared by the whole app. Model units are millimetres, Y is up
-// (Front = XY, Top = XZ, Right = YZ), the same convention SolidWorks users are used to.
+// Small vector / plane helpers shared by the whole app. Model units are millimetres, Z is up
+// (Front = XZ, Top = XY, Right = YZ), with the standard views named as CAD users expect.
 
 export const V = {
   add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
@@ -28,9 +28,10 @@ export const V = {
 };
 
 export const BASE_PLANES = {
-  Front: { o: [0, 0, 0], x: [1, 0, 0], n: [0, 0, 1] },
-  Top: { o: [0, 0, 0], x: [1, 0, 0], n: [0, 1, 0] },
-  Right: { o: [0, 0, 0], x: [0, 0, -1], n: [1, 0, 0] },
+  // Z is up. Each plane's normal points at the viewer of the matching standard view.
+  Front: { o: [0, 0, 0], x: [1, 0, 0], n: [0, -1, 0] },
+  Top: { o: [0, 0, 0], x: [1, 0, 0], n: [0, 0, 1] },
+  Right: { o: [0, 0, 0], x: [0, 1, 0], n: [1, 0, 0] },
 };
 
 export const planeY = (pl) => V.cross(pl.n, pl.x);
@@ -53,10 +54,10 @@ export function toLocal(pl, p) {
 // Build a plane from an origin and a normal, choosing a stable in-plane X direction.
 export function planeFromNormal(o, n) {
   n = V.norm(n);
-  // up cross n -> for n = +Z gives +X (Front), for n = +X gives -Z (Right)
-  const x = Math.abs(n[1]) > 0.999
+  // up (Z) cross n -> for n = -Y gives +X (Front), for n = +X gives +Y (Right)
+  const x = Math.abs(n[2]) > 0.999
     ? V.norm(V.sub([1, 0, 0], V.mul(n, n[0])))
-    : V.norm(V.cross([0, 1, 0], n));
+    : V.norm(V.cross([0, 0, 1], n));
   return { o: [...o], x, n };
 }
 
