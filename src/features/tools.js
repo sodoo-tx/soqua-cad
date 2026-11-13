@@ -25,6 +25,23 @@ register('displayMenu', () => {
   popup([['Shaded With Edges', 'shadedEdges'], ['Shaded', 'shaded'], ['Hidden Lines Removed', 'hidden'], ['Wireframe', 'wireframe']].map(([l, v]) => ({ label: l, icon: v, action: () => app.vp.setDisplay(v) })), r.left + 60, r.bottom + 2);
 });
 register('togglePlanes', () => app.vp.setShowPlanes(!app.vp.showPlanes));
+register('turntable', () => {
+  if (!app.anim) return toast('Animations are switched off (View ▸ Animations).');
+  const on = !app.vp.turntable;
+  app.vp.setTurntable(on);
+  toast(on ? 'Turntable on – drag the model or click Turntable again to stop.' : 'Turntable off');
+});
+register('toggleAnimations', () => {
+  app.anim = !app.anim;
+  try {
+    localStorage.setItem('soqua-anim', app.anim ? '1' : '0');
+  } catch (e) {
+    /* private mode */
+  }
+  document.body.classList.toggle('no-anim', !app.anim);
+  app.vp.setAnimate(app.anim);
+  toast(app.anim ? 'Animations on' : 'Animations off');
+});
 register('rebuild', () => {
   app.doc._cache = [];
   const t = performance.now();
@@ -361,7 +378,10 @@ const ramp = (t) => {
   const x = Math.max(0, Math.min(0.9999, t)) * 4, i = Math.floor(x), f = x - i;
   return stops[i].map((c, k) => (c + (stops[i + 1][k] - c) * f) / 255);
 };
+let simAnim = 0;
 function clearSim() {
+  cancelAnimationFrame(simAnim);
+  simAnim = 0;
   const g = app.vp.groups.extras;
   app.vp.disposeGroup(g);
   app.vp.groups.bodies.visible = true;
@@ -373,7 +393,7 @@ register('simStudy', () => {
   const doc = app.doc, vp = app.vp;
   if (!doc.state.solid) return toast('A static study needs a solid body.');
   setSelection([]);
-  const vals = { material: doc.material, fixed: [], loaded: [], force: 1000, dir: 'normal', resolution: 28, plot: 'stress', scale: 0, gravity: false };
+  const vals = { material: doc.material, fixed: [], loaded: [], force: 1000, dir: 'normal', resolution: 28, plot: 'stress', scale: 0, gravity: false, anim: true };
   let result = null, positions = null;
   const show = (v) => {
     if (!result) return;
@@ -400,6 +420,20 @@ register('simStudy', () => {
     const unit = v.plot === 'stress' ? 'MPa' : 'mm';
     const lg = $('#legend');
     lg.hidden = false;
+    if (v.anim && vp.animate) {
+      // breathe between the unloaded and the fully loaded shape so the way the part moves is obvious
+      const attr = geo.attributes.position, arr = attr.array, disp = result.vertexDisp;
+      let frame = 0;
+      const loop = (now) => {
+        const k = 0.5 - 0.5 * Math.cos(now * 0.0028);
+        for (let i = 0; i < arr.length; i++) arr[i] = positions[i] + disp[i] * sc * k;
+        attr.needsUpdate = true;
+        if (frame++ % 4 === 0) geo.computeVertexNormals();
+        vp.render();
+        simAnim = requestAnimationFrame(loop);
+      };
+      simAnim = requestAnimationFrame(loop);
+    }
     lg.innerHTML = `<b>${v.plot === 'stress' ? 'von Mises stress' : 'Displacement'}</b><div style="margin-top:6px"><div class="grad"></div><div class="ticks">${[1, 0.75, 0.5, 0.25, 0].map((k) => `<span>${fmt(max * k, max < 1 ? 4 : 2)} ${unit}</span>`).join('')}</div></div><div style="clear:both;padding-top:6px;color:#5d6b7a">Deformation ×${fmt(sc, 1)}</div>`;
     vp.render();
   };
@@ -460,10 +494,11 @@ register('simStudy', () => {
       { key: 'run', group: 'Run', type: 'buttons', buttons: [{ label: '▶ Run study', primary: true, action: (pm) => runStudy(pm) }, { label: 'Hide results', action: () => clearSim() }] },
       { key: 'plot', label: 'Plot', group: 'Results', type: 'select', options: [['stress', 'von Mises stress'], ['disp', 'Displacement']] },
       { key: 'scale', label: 'Deform. scale (0=auto)', group: 'Results', type: 'number', min: 0 },
+      { key: 'anim', label: 'Animate the deformation', group: 'Results', type: 'check' },
     ],
     onChange: (v, key) => {
       if (key === 'material') doc.material = v.material;
-      if (key === 'plot' || key === 'scale') show(v);
+      if (key === 'plot' || key === 'scale' || key === 'anim') show(v);
     },
     onClose: () => {
       clearSim();

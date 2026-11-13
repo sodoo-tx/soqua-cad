@@ -186,3 +186,51 @@ table.grid input { width: 100%; border: 0; padding: 2px; background: transparent
 .bar.det i { animation: none; margin: 0; width: 0; transition: width .15s linear; }
 .rb:focus-visible, .btn:focus-visible, .mi:focus-visible, #hud button:focus-visible, #menubar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pm-msg, .pm-err { overflow-wrap: anywhere; }
+
+/* ---------- motion and glow (switch off with View > Animations, or the system "reduce motion" setting) */
+@keyframes soq-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes soq-rise { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes soq-slide { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes soq-toast { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes soq-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes soq-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(31,111,181,.0), 0 0 0 1px rgba(31,111,181,.55); } 50% { box-shadow: 0 0 10px 2px rgba(47,196,255,.45), 0 0 0 1px rgba(31,111,181,.9); } }
+@keyframes soq-logo { 0%, 100% { box-shadow: 0 0 0 0 rgba(47,196,255,0); transform: scale(1); } 50% { box-shadow: 0 0 34px 8px rgba(47,196,255,.45); transform: scale(1.04); } }
+@keyframes soq-shimmer { from { background-position: -160px 0; } to { background-position: 160px 0; } }
+@keyframes soq-ok { 0%, 100% { box-shadow: 0 0 0 0 rgba(46,125,50,0); } 50% { box-shadow: 0 0 12px 2px rgba(46,160,67,.45); } }
+
+.rb { transition: background .14s ease, border-color .14s ease, transform .1s ease, box-shadow .14s ease; }
+.rb svg { transition: transform .16s cubic-bezier(.2,.8,.2,1), filter .16s ease; }
+.rb:hover:not(:disabled) svg { transform: translateY(-2px) scale(1.07); filter: drop-shadow(0 3px 3px rgba(20,40,70,.22)); }
+.rb:active:not(:disabled) { transform: scale(.95); }
+.rb.active { box-shadow: 0 0 8px rgba(47,160,235,.55), inset 0 0 0 1px rgba(47,160,235,.5); }
+#ribbon-tabs button { transition: background .14s ease, border-color .14s ease; }
+#ribbon-tabs button.active { box-shadow: 0 -2px 8px -2px rgba(47,160,235,.7); }
+#ribbon > * { animation: soq-fade .16s ease both; }
+#hud button, #quick button, .btn, .mi, .ti, #menubar button, #left-tabs button, #mode-tabs button { transition: background .12s ease, border-color .12s ease, box-shadow .14s ease, transform .1s ease; }
+#hud button:active, .btn:active { transform: scale(.94); }
+.btn.primary:hover { box-shadow: 0 0 0 3px rgba(47,160,235,.28), 0 2px 8px rgba(24,90,148,.35); }
+.menu, #ctx { animation: soq-pop .12s cubic-bezier(.2,.8,.2,1) both; transform-origin: top left; }
+#modal { animation: soq-fade .14s ease both; }
+.dlg { animation: soq-rise .2s cubic-bezier(.2,.8,.2,1) both; }
+#toast div { animation: soq-toast .2s cubic-bezier(.2,.8,.2,1) both; }
+#pm > * { animation: soq-slide .18s cubic-bezier(.2,.8,.2,1) both; }
+#pm > .pm-group:nth-child(n+4), #pm > div > .pm-group:nth-child(2) { animation-delay: .03s; }
+.selbox.active { animation: soq-glow 1.8s ease-in-out infinite; outline: none; }
+.selbox .chip { animation: soq-pop .14s ease both; }
+.ti.sel { box-shadow: inset 3px 0 0 var(--accent); }
+.rollbar { background: linear-gradient(90deg, #c99700 0, #ffe27a 50%, #c99700 100%) 0 0 / 160px 100% repeat-x, #c99700; animation: soq-shimmer 2.4s linear infinite; }
+#corner { animation: soq-rise .22s cubic-bezier(.2,.8,.2,1) both; }
+#corner .ok { animation: soq-ok 2.2s ease-in-out infinite; }
+#legend { animation: soq-rise .25s ease both; }
+#left { transition: transform .18s cubic-bezier(.2,.8,.2,1); }
+.dimlabel { transition: background .12s ease, box-shadow .12s ease; }
+.dimlabel:hover { box-shadow: 0 0 8px rgba(240,170,0,.7); }
+.brand-mark.big { animation: soq-logo 1.9s ease-in-out infinite; }
+.bar i { box-shadow: 0 0 8px rgba(47,196,255,.8); background: linear-gradient(90deg, var(--accent2), #2fc4ff); }
+#sk-status.full { text-shadow: 0 0 8px rgba(46,160,67,.55); }
+#docname, #hint { transition: color .2s ease; }
+
+body.no-anim *, body.no-anim *::before, body.no-anim *::after { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  body:not(.anim-forced) .brand-mark.big, body:not(.anim-forced) .rollbar, body:not(.anim-forced) .selbox.active, body:not(.anim-forced) #corner .ok { animation: none; }
+}

@@ -58,6 +58,9 @@ export class Viewport {
     this.filter = null; // optional (hit) => boolean
     this.ray = new THREE.Raycaster();
     this.lineMats = new Set();
+    this.animate = true; // motion effects (glow pulse, build flash, turntable); switched by the app
+    this.turntable = false;
+    this._tessCache = new WeakMap(); // shape -> tessellation, so unchanged bodies are never re-meshed
     this.modelSize = 200;
     this._buildTriad();
     this._bind();
@@ -210,7 +213,14 @@ export class Viewport {
     const add = (body) => {
       let tess;
       try {
-        tess = K.tessellate(body.shape, { tolerance: Math.max(0.01, this.modelSize * 0.0004), angularTolerance: 0.2 });
+        const tol = Math.max(0.01, this.modelSize * 0.0004);
+        const key = Math.round(Math.log2(tol) * 2); // re-mesh only when the required precision changes noticeably
+        const hit = this._tessCache.get(body.shape);
+        if (hit && hit.key === key) tess = hit.tess;
+        else {
+          tess = K.tessellate(body.shape, { tolerance: tol, angularTolerance: 0.2 });
+          this._tessCache.set(body.shape, { key, tess });
+        }
       } catch (e) {
         console.warn('tessellation failed', e);
         return;
@@ -276,7 +286,66 @@ export class Viewport {
     const box = new THREE.Box3().setFromObject(this.groups.bodies);
     if (!box.isEmpty()) this.modelSize = Math.max(10, box.getSize(new THREE.Vector3()).length());
     this.updateFloor(box);
+    // a short glow sweeps over the body whenever its geometry has just changed
+    const solid = st.solid || null;
+    this._flash = null;
+    if (this.animate && this._lastSolid !== undefined && solid && solid !== this._lastSolid && this.display !== 'hidden') {
+      this._flash = { t0: performance.now(), dur: 560, mats: this.pickables.filter((m) => m.userData.body.kind !== 'mesh').map((m) => m.material) };
+      this.startFx();
+    }
+    this._lastSolid = solid;
     this.render();
+  }
+
+  // ------------------------------------------------------------ motion effects
+  // One shared animation loop that only runs while something is actually animating.
+  startFx() {
+    if (this._fx) return;
+    const loop = (t) => {
+      this._fx = 0;
+      let alive = false;
+      if (this.animate && this.groups.overlay.children.length) {
+        const k = 0.5 + 0.5 * Math.sin(t * 0.0055);
+        this.groups.overlay.traverse((o) => {
+          const p = o.userData.pulse;
+          if (p && o.material) o.material.opacity = p[0] + p[1] * k;
+        });
+        alive = true;
+      }
+      if (this._flash) {
+        const u = Math.max(0, (t - this._flash.t0) / this._flash.dur);
+        if (u >= 1 || !this.animate) {
+          this._flash = null;
+          this.applyDisplay();
+        } else {
+          const e = (1 - u) * (1 - u);
+          for (const m of this._flash.mats) {
+            m.emissive.setHex(0x2fc4ff);
+            m.emissiveIntensity = 0.5 * e;
+          }
+          alive = true;
+        }
+      }
+      if (this.turntable) {
+        const dt = this._ttLast ? Math.min(60, t - this._ttLast) : 16;
+        this._ttLast = t;
+        this.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.00055)).normalize();
+        this.updateCamera();
+        alive = true;
+      } else this._ttLast = 0;
+      this.render();
+      if (alive) this._fx = requestAnimationFrame(loop);
+    };
+    this._fx = requestAnimationFrame(loop);
+  }
+  setTurntable(on) {
+    this.turntable = on;
+    if (on) this.startFx();
+  }
+  setAnimate(on) {
+    this.animate = on;
+    if (!on) this.turntable = false;
+    this.refreshOverlay();
   }
 
   makeMaterial(ap, kind) {
@@ -546,12 +615,22 @@ export class Viewport {
       geo.setIndex(new THREE.BufferAttribute(t.indices.subarray(g.start, g.start + g.count), 1));
       const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
       m.renderOrder = 5;
+      m.userData.pulse = [0.34, 0.26];
       return m;
     }
     if (h.kind === 'edge') {
       const t = h.body.tess, g = t.edgeGroups.find((x) => x.edge === h.index);
       if (!g) return null;
-      return this.fat(Array.from(t.lines.subarray(g.start * 3, (g.start + g.count) * 3)), color, 4);
+      // a wide soft halo under a crisp core line reads as a glow without any post-processing cost
+      const seg = Array.from(t.lines.subarray(g.start * 3, (g.start + g.count) * 3));
+      const grp = new THREE.Group();
+      const halo = this.fat(seg, color, 13);
+      halo.material.opacity = 0.2;
+      halo.userData.pulse = [0.1, 0.22];
+      halo.renderOrder = 9;
+      const core = this.fat(seg, color, 3.6);
+      grp.add(halo, core);
+      return grp;
     }
     if (h.kind === 'vertex') {
       const geo = new THREE.BufferGeometry();
@@ -573,7 +652,13 @@ export class Viewport {
     const g = this.groups.overlay;
     g.children.slice().forEach((o) => {
       g.remove(o);
-      if (o.geometry && !o.userData.shared) o.geometry.dispose();
+      o.traverse((c) => {
+        if (c.geometry && !c.userData.shared) c.geometry.dispose();
+        if (c.material) {
+          this.lineMats.delete(c.material);
+          c.material.dispose();
+        }
+      });
     });
     for (const s of this.selection) {
       const o = this.highlightObject(s, SELECT);
@@ -583,6 +668,7 @@ export class Viewport {
       const o = this.highlightObject(this.hover, HOVER);
       if (o) g.add(o);
     }
+    if (g.children.length && this.animate) this.startFx();
     this.refreshPlaneVisibility();
   }
   setSelection(list) {
@@ -663,9 +749,18 @@ export class Viewport {
         if (this.tool.noHover) return;
       }
       if (e.pointerType !== 'touch') {
-        const h = this.pick(e);
-        this.setHover(h);
-        if (this.onHover) this.onHover(h, e);
+        // ray-casting is the expensive part of hovering: do it at most once per rendered frame
+        this._hoverEv = e;
+        if (!this._hoverRaf) {
+          this._hoverRaf = requestAnimationFrame(() => {
+            this._hoverRaf = 0;
+            const ev = this._hoverEv;
+            if (!ev || this.tool && this.tool.noHover) return;
+            const h = this.pick(ev);
+            this.setHover(h);
+            if (this.onHover) this.onHover(h, ev);
+          });
+        }
       }
     });
     const up = (e) => {
@@ -705,6 +800,7 @@ export class Viewport {
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-dy * 0.008, -dx * 0.008, 0, 'XYZ'));
     this.quat.multiply(q).normalize();
     this.qGoal = null;
+    this.turntable = false; // grabbing the model stops the turntable
     this.updateCamera();
   }
   pan(dx, dy) {

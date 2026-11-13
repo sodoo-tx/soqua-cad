@@ -76,7 +76,7 @@ const RIBBON = {
     ['simStudy', 'Static Study', 'sim'], ['material', 'Apply Material', 'material'], ['simClear', 'Hide Results', 'eye'],
   ],
   Render: [
-    ['appearance', 'Edit Appearance', 'appearance'], ['faceColor', 'Face Color', 'texture'], ['scene', 'Edit Scene', 'scene'], ['renderImage', 'Final Render', 'render'], ['screenshot', 'Save Image', 'export'],
+    ['appearance', 'Edit Appearance', 'appearance'], ['faceColor', 'Face Color', 'texture'], ['scene', 'Edit Scene', 'scene'], ['renderImage', 'Final Render', 'render'], ['screenshot', 'Save Image', 'export'], '|', ['turntable', 'Turntable', 'turntable'],
   ],
   Drawing: [
     ['drwTemplate', 'Sheet Format', 'template'], ['drwStandard', 'Standard 3 View', 'stdviews'], ['drwView', 'Model View', 'view'], '|',
@@ -98,7 +98,8 @@ const MENUS = {
     ['Zoom to Fit', 'fit', 'fit', 'F'], ['Front', 'views', 'view:front', 'Ctrl+1'], ['Back', 'views', 'view:back', 'Ctrl+2'], ['Left', 'views', 'view:left', 'Ctrl+3'], ['Right', 'views', 'view:right', 'Ctrl+4'],
     ['Top', 'views', 'view:top', 'Ctrl+5'], ['Bottom', 'views', 'view:bottom', 'Ctrl+6'], ['Isometric', 'views', 'view:iso', 'Ctrl+7'], ['Normal To', 'normal', 'normalTo', 'Ctrl+8'], '-',
     ['Shaded With Edges', 'shadedEdges', 'display:shadedEdges'], ['Shaded', 'shaded', 'display:shaded'], ['Hidden Lines Removed', 'hidden', 'display:hidden'], ['Wireframe', 'wireframe', 'display:wireframe'], '-',
-    ['Section View', 'section', 'sectionView'], ['Show / Hide Planes', 'planes', 'togglePlanes'],
+    ['Section View', 'section', 'sectionView'], ['Show / Hide Planes', 'planes', 'togglePlanes'], '-',
+    ['Turntable', 'turntable', 'turntable'], ['Animations On / Off', 'turntable', 'toggleAnimations'],
   ],
   Insert: [
     ['Sketch', 'sketch', 'sketch'], ['3D Sketch', 'sketch3d', 'sketch3d'], ['Reference Plane', 'plane', 'plane'], '-',
@@ -577,6 +578,16 @@ export function loadAutosave() {
 
 export function initApp() {
   app.vp = new Viewport($('#gl'), $('#labels'));
+  // motion: on by default, off when the system asks for reduced motion, and the user's own choice wins
+  let pref = null;
+  try {
+    pref = localStorage.getItem('soqua-anim');
+  } catch (e) {
+    /* private mode */
+  }
+  app.anim = pref === '1' || (pref !== '0' && !matchMedia('(prefers-reduced-motion: reduce)').matches);
+  app.vp.animate = app.anim;
+  document.body.classList.toggle('no-anim', !app.anim);
   app.vp.onPick = onPick;
   app.vp.onContext = onContext;
   app.vp.onDbl = (h) => {
