@@ -1,0 +1,2 @@
+{ "name": "SOQUA design", "short_name": "SOQUA", "start_url": ".", "display": "standalone", "background_color": "#e9edf2", "theme_color": "#2b3a4a",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }] }

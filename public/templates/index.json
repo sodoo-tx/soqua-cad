@@ -1,0 +1,26 @@
+[
+  {
+    "id": "a3_mn",
+    "name": "A3 – Mongolian title block",
+    "width": 420,
+    "height": 297
+  },
+  {
+    "id": "a3_mn_production",
+    "name": "A3 – Mongolian production title block",
+    "width": 420,
+    "height": 297
+  },
+  {
+    "id": "a3_iso",
+    "name": "A3 – ISO title block",
+    "width": 420,
+    "height": 297
+  },
+  {
+    "id": "a4_iso",
+    "name": "A4 – ISO title block",
+    "width": 210,
+    "height": 297
+  }
+]

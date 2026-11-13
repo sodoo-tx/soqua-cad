@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#2b3a4a" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="description" content="SOQUA design - parametric 3D CAD in the browser" />
+<title>SOQUA design</title>
+<link rel="icon" href="./favicon.svg" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="drawerBtn" class="tb-btn" title="Show / hide the tree">☰</button>
+    <div id="brand"><span class="brand-mark"></span><b>SOQUA</b>&nbsp;design</div>
+    <nav id="menubar"></nav>
+    <div id="quick"></div>
+    <div id="docname" title="Double-click to rename"></div>
+  </header>
+  <div id="ribbon-tabs"></div>
+  <div id="ribbon"></div>
+  <main id="work">
+    <aside id="left">
+      <div id="left-tabs">
+        <button data-tab="tree" class="active" title="FeatureManager design tree">Tree</button>
+        <button data-tab="pm" title="PropertyManager">Properties</button>
+      </div>
+      <div id="tree" class="left-pane"></div>
+      <div id="pm" class="left-pane" hidden></div>
+    </aside>
+    <section id="view">
+      <canvas id="gl"></canvas>
+      <div id="labels"></div>
+      <div id="drawing" hidden></div>
+      <div id="hud"></div>
+      <div id="corner" hidden></div>
+      <div id="legend" hidden></div>
+      <div id="triad-label"></div>
+    </section>
+  </main>
+  <footer id="status">
+    <div id="mode-tabs"><button data-mode="model" class="active">Model</button><button data-mode="drawing">Drawing</button></div>
+    <div id="hint">Ready</div>
+    <div id="sk-status"></div>
+    <div id="coords"></div>
+    <div id="units">MMGS</div>
+  </footer>
+</div>
+<div id="splash"><div class="splash-box"><div class="brand-mark big"></div><h1>SOQUA design</h1><p id="splash-msg">Loading geometry kernel…</p><div class="bar"><i></i></div></div></div>
+<div id="ctx" hidden></div>
+<div id="modal" hidden></div>
+<div id="toast"></div>
+<input type="file" id="file" hidden multiple />
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

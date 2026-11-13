@@ -1,0 +1,6 @@
+# Optional: Netlify can host this the same way as Cloudflare Pages.
+[build]
+  command = "npm run build"
+  publish = "dist"
+[build.environment]
+  NODE_VERSION = "22"
