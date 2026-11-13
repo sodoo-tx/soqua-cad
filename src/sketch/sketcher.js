@@ -8,7 +8,8 @@ import { el, toast, setHint, promptDlg, popup } from '../ui/ui.js';
 import * as K from '../kernel.js';
 
 const COL = { under: 0x1b4fd8, full: 0x101418, cons: 0x6d7a88, sel: 0x00a8f0, hover: 0xff8a00, dim: 0x6b7480, preview: 0x1b4fd8 };
-const GLYPH = { horizontal: '—', vertical: '|', parallel: '∥', perpendicular: '⊥', equal: '=', tangent: '⌒', concentric: '◎', coincident: '•', collinear: '⫽', midpoint: '⊢', fix: '⚓', symmetric: '⇔', pointOnLine: '∙', pointOnCircle: '∙' };
+const GLYPH = { horizontal: '━', vertical: '┃', parallel: '∥', perpendicular: '⊥', equal: '=', tangent: '⌒', concentric: '◎', coincident: '●', collinear: '⫽', midpoint: '◐', fix: '⚓', symmetric: '⇔', pointOnLine: '●', pointOnCircle: '●' };
+export const REL_NAME = { horizontal: 'Horizontal', vertical: 'Vertical', parallel: 'Parallel', perpendicular: 'Perpendicular', equal: 'Equal', tangent: 'Tangent', concentric: 'Concentric', coincident: 'Coincident', collinear: 'Collinear', midpoint: 'Midpoint', fix: 'Fixed', symmetric: 'Symmetric', pointOnLine: 'Coincident (on line)', pointOnCircle: 'Coincident (on circle)', distance: 'Distance', hdistance: 'Horizontal distance', vdistance: 'Vertical distance', length: 'Length', pointLineDistance: 'Distance to line', radius: 'Radius', diameter: 'Diameter', angle: 'Angle' };
 const DIMS = ['distance', 'hdistance', 'vdistance', 'length', 'pointLineDistance', 'radius', 'diameter', 'angle'];
 
 export class Sketcher {
@@ -41,6 +42,8 @@ export class Sketcher {
     this.vp.onCamera = null;
     this.vp.disposeGroup(this.group);
     this.clearLabels();
+    this.setLive(null);
+    if (this.numEl) this.numEl.remove();
     this.vp.render();
   }
 
@@ -234,12 +237,13 @@ export class Sketcher {
     this.tool = t;
     this.clicks = [];
     this.preview = null;
+    this.setLive(null);
     const hints = {
-      select: 'Select or drag sketch entities. Double-click a dimension to edit it.', line: 'Line: click start point, then next points. Double-click or Esc to end the chain.',
-      centerline: 'Centerline: click two points.', rect: 'Corner rectangle: click two opposite corners.', crect: 'Center rectangle: click the center, then a corner.',
-      circle: 'Circle: click the center, then a point on the circle.', arc3: '3-point arc: click start, end, then a point on the arc.', arcc: 'Centerpoint arc: click center, start, then end.',
+      select: 'Select or drag sketch entities. Double-click a dimension to edit it.', line: 'Line: click the start point, then the next points – or type a length and press Enter. Double-click or Esc ends the chain.',
+      centerline: 'Centerline: click two points.', rect: 'Corner rectangle: click two opposite corners – or type width, Tab, height, Enter.', crect: 'Center rectangle: click the center, then a corner – or type width, Tab, height, Enter.',
+      circle: 'Circle: click the center, then a point on the circle – or type the diameter and press Enter.', arc3: '3-point arc: click start, end, then a point on the arc.', arcc: 'Centerpoint arc: click center, start, then end.',
       polygon: 'Polygon: click the center, then a vertex.', slot: 'Straight slot: click the two centers, then drag out the width.', spline: 'Spline: click through-points; double-click to finish.',
-      point: 'Point: click to place.', dimension: 'Smart Dimension: click a line, circle, arc or two points/lines, then click to place the dimension.',
+      point: 'Point: click to place.', dimension: 'Smart Dimension: click an entity (or two), move the cursor to position the dimension, click to place, then type the value.',
       schamfer: 'Sketch chamfer: click a corner where two lines meet.',
       trim: 'Trim: click the part of an entity you want to remove.', sfillet: 'Sketch fillet: click a corner where two lines meet.', text: 'Text: click where the text starts.',
     };
@@ -366,6 +370,8 @@ export class Sketcher {
       e.preventDefault();
       e.stopImmediatePropagation();
       this.undo();
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && /^[0-9.]$/.test(e.key) && this.startNumeric(e.key)) {
+      e.preventDefault();
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const map = { l: 'line', c: 'circle', r: 'rect', a: 'arc3', d: 'dimension', t: 'trim', s: 'spline', p: 'point' };
       if (map[e.key.toLowerCase()]) {
@@ -601,6 +607,7 @@ export class Sketcher {
     this.cleanup();
     this.sel.clear();
     this.changed();
+    this.onChange('selection');
   }
   // drop constraints with dangling refs and points nobody uses
   cleanup() {
@@ -685,26 +692,14 @@ export class Sketcher {
   }
 
   // ---------------------------------------------------------------- dimensions
-  dimensionClick(s) {
-    const p = [s.x, s.y];
-    const picks = this.clicks;
-    const h = this.hit(p);
-    if (picks.length && (!h || picks.ready)) return this.placeDimension(p);
-    if (!h) return;
-    picks.push(h);
-    const first = picks[0], e1 = first.kind === 'ent' ? this.ent(first.id) : null;
-    // decide if we already have enough to place
-    if (picks.length === 1) {
-      if (e1 && (e1.type === 'line' || e1.type === 'circle' || e1.type === 'arc')) picks.maybe = true; // can place now or pick a second item
-    } else picks.ready = true;
-    setHint(picks.ready ? 'Click to place the dimension.' : 'Click to place the dimension, or pick a second entity to dimension between.');
-  }
-  placeDimension(pos) {
-    const picks = this.clicks;
+  // What dimension do these picks make if it is placed at pos? (null = not dimensionable)
+  dimSpec(picks, pos) {
     const a = picks[0], b = picks[1];
+    if (!a) return null;
     const ea = a.kind === 'ent' ? this.ent(a.id) : null, eb = b && b.kind === 'ent' ? this.ent(b.id) : null;
-    let con = null;
+    // two points: horizontal / vertical / aligned depending on where the cursor is, like the reference CAD systems
     const ptDim = (p, q) => {
+      if (p === q) return null;
       const P = this.P(p), Q = this.P(q);
       const lo = [Math.min(P[0], Q[0]), Math.min(P[1], Q[1])], hi = [Math.max(P[0], Q[0]), Math.max(P[1], Q[1])];
       const dx = Math.abs(P[0] - Q[0]), dy = Math.abs(P[1] - Q[1]);
@@ -715,38 +710,285 @@ export class Sketcher {
       }
       return { type: 'distance', p, q, value: Math.hypot(dx, dy) };
     };
+    const anchor = (h, e) => (h.kind === 'pt' ? h.id : e && e.type !== 'line' ? e.c || e.p || null : null);
+    const radiusOf = (e) => Math.hypot(this.P(e.a)[0] - this.P(e.c)[0], this.P(e.a)[1] - this.P(e.c)[1]);
+    let con = null;
     if (!b) {
       if (ea && ea.type === 'line') con = ptDim(ea.a, ea.b);
       else if (ea && ea.type === 'circle') con = { type: 'diameter', ent: ea.id, value: ea.r * 2 };
-      else if (ea && ea.type === 'arc') con = { type: 'radius', ent: ea.id, value: Math.hypot(...V.sub([...this.P(ea.a), 0], [...this.P(ea.c), 0])) };
+      else if (ea && ea.type === 'arc') con = { type: 'radius', ent: ea.id, value: radiusOf(ea) };
     } else {
-      const pa = a.kind === 'pt' ? a.id : ea && ea.type !== 'line' ? ea.c || ea.p : null;
-      const pb = b.kind === 'pt' ? b.id : eb && eb.type !== 'line' ? eb.c || eb.p : null;
+      const pa = anchor(a, ea), pb = anchor(b, eb);
       if (pa && pb) con = ptDim(pa, pb);
       else if (ea && eb && ea.type === 'line' && eb.type === 'line') {
-        const d1 = V.sub([...this.P(ea.b), 0], [...this.P(ea.a), 0]), d2 = V.sub([...this.P(eb.b), 0], [...this.P(eb.a), 0]);
-        const cross = Math.abs(d1[0] * d2[1] - d1[1] * d2[0]) / ((V.len(d1) * V.len(d2)) || 1);
-        if (cross < 1e-6) con = { type: 'pointLineDistance', p: eb.a, line: ea.id, value: this.entDistInfinite(ea, this.P(eb.a)) };
-        else {
-          const ang = Math.acos(Math.max(-1, Math.min(1, V.dot(d1, d2) / (V.len(d1) * V.len(d2))))) * (180 / Math.PI);
-          con = { type: 'angle', l1: ea.id, l2: eb.id, value: ang };
-        }
+        const A = this.P(ea.a), B = this.P(ea.b), C = this.P(eb.a), D = this.P(eb.b);
+        const d1 = [B[0] - A[0], B[1] - A[1]], d2 = [D[0] - C[0], D[1] - C[1]];
+        const l1 = Math.hypot(d1[0], d1[1]) || 1, l2 = Math.hypot(d2[0], d2[1]) || 1;
+        if (Math.abs(d1[0] * d2[1] - d1[1] * d2[0]) / (l1 * l2) < 1e-6) con = { type: 'pointLineDistance', p: eb.a, line: ea.id, value: this.entDistInfinite(ea, C) };
+        else con = { type: 'angle', l1: ea.id, l2: eb.id, value: (Math.acos(Math.max(-1, Math.min(1, (d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)))) * 180) / Math.PI };
       } else {
-        const line = ea && ea.type === 'line' ? ea : eb;
+        const line = ea && ea.type === 'line' ? ea : eb && eb.type === 'line' ? eb : null;
         const pt = line === ea ? pb : pa;
         if (line && pt) con = { type: 'pointLineDistance', p: pt, line: line.id, value: this.entDistInfinite(line, this.P(pt)) };
       }
     }
-    this.clicks = [];
-    if (!con || !(con.value > 1e-9)) {
-      toast('Those entities cannot be dimensioned together.', true);
+    if (!con || !(con.value > 1e-9)) return null;
+    con.pos = pos;
+    return con;
+  }
+  dimensionClick(s) {
+    const p = [s.x, s.y];
+    const picks = this.clicks;
+    const h = this.hit(p);
+    if (!picks.length) {
+      if (!h) return toast('Click a line, circle, arc or point to dimension.');
+      const e = h.kind === 'ent' ? this.ent(h.id) : null;
+      if (e && e.type === 'spline') return toast('Splines are dimensioned through their points: click a point instead.');
+      picks.push(h);
+      const single = !!this.dimSpec(picks, p);
+      setHint(single ? 'Move the cursor to position the dimension and click to place it – or click a second entity to dimension between the two.' : 'Click the second point or entity.');
+      this.redrawPreview();
       return;
     }
+    // a second entity under the cursor extends the dimension to "between the two"
+    if (picks.length === 1 && h && h.id !== picks[0].id && this.dimSpec([picks[0], h], p)) {
+      picks.push(h);
+      setHint('Move the cursor to position the dimension and click to place it.');
+      this.redrawPreview();
+      return;
+    }
+    const con = this.dimSpec(picks, p);
+    this.clicks = [];
+    if (!con) {
+      this.redrawPreview();
+      return toast('Those entities cannot be dimensioned together.', true);
+    }
     this.checkpoint();
-    con.pos = pos;
     this.addCon(con);
     this.changed();
+    setHint('Type the value and press Enter. Smart Dimension stays active: pick the next entity, or press Esc.');
     this.editDimension(con, true);
+  }
+  // Leader / extension geometry of a dimension: { segs: [[p, q], ...], at: label position }
+  dimGraphics(c) {
+    const pos = c.pos || [0, 0];
+    const segs = [];
+    const ar = this.vp.pxSize() * 9; // arrow size on screen
+    const arrow = (tip, dir) => {
+      const n = [-dir[1], dir[0]];
+      segs.push([tip, [tip[0] - dir[0] * ar + n[0] * ar * 0.3, tip[1] - dir[1] * ar + n[1] * ar * 0.3]]);
+      segs.push([tip, [tip[0] - dir[0] * ar - n[0] * ar * 0.3, tip[1] - dir[1] * ar - n[1] * ar * 0.3]]);
+    };
+    const linear = (P, Q, p2, q2) => {
+      const gap = ar * 0.25;
+      for (const [a, b] of [[P, p2], [Q, q2]]) {
+        const d = sub2(b, a), L = Math.hypot(d[0], d[1]);
+        if (L > 1e-9) segs.push([[a[0] + (d[0] / L) * gap, a[1] + (d[1] / L) * gap], [b[0] + (d[0] / L) * ar * 0.4, b[1] + (d[1] / L) * ar * 0.4]]);
+      }
+      segs.push([p2, q2]);
+      const u = norm2(sub2(q2, p2));
+      if (Math.hypot(q2[0] - p2[0], q2[1] - p2[1]) > ar * 2.4) {
+        arrow(p2, [-u[0], -u[1]]);
+        arrow(q2, u);
+      }
+      return [(p2[0] + q2[0]) / 2, (p2[1] + q2[1]) / 2];
+    };
+    if (c.type === 'distance' || c.type === 'hdistance' || c.type === 'vdistance') {
+      if (!this.sk.pts[c.p] || !this.sk.pts[c.q]) return { segs, at: pos };
+      const P = this.P(c.p), Q = this.P(c.q);
+      if (c.type === 'hdistance') return { segs, at: linear(P, Q, [P[0], pos[1]], [Q[0], pos[1]]) };
+      if (c.type === 'vdistance') return { segs, at: linear(P, Q, [pos[0], P[1]], [pos[0], Q[1]]) };
+      const d = norm2(sub2(Q, P)), nrm = [-d[1], d[0]];
+      const off = (pos[0] - P[0]) * nrm[0] + (pos[1] - P[1]) * nrm[1];
+      return { segs, at: linear(P, Q, [P[0] + nrm[0] * off, P[1] + nrm[1] * off], [Q[0] + nrm[0] * off, Q[1] + nrm[1] * off]) };
+    }
+    if (c.type === 'radius' || c.type === 'diameter') {
+      const e = this.ent(c.ent);
+      if (!e) return { segs, at: pos };
+      const C = this.P(e.c), r = e.type === 'circle' ? e.r : Math.hypot(this.P(e.a)[0] - C[0], this.P(e.a)[1] - C[1]);
+      const u = norm2(sub2(pos, C)), rim = [C[0] + u[0] * r, C[1] + u[1] * r];
+      const outside = Math.hypot(pos[0] - C[0], pos[1] - C[1]) > r;
+      segs.push([c.type === 'diameter' ? [C[0] - u[0] * r, C[1] - u[1] * r] : C, outside ? pos : rim]);
+      arrow(rim, outside ? [-u[0], -u[1]] : u);
+      if (c.type === 'diameter') arrow([C[0] - u[0] * r, C[1] - u[1] * r], outside ? u : [-u[0], -u[1]]);
+      return { segs, at: pos };
+    }
+    if (c.type === 'pointLineDistance') {
+      const l = this.ent(c.line);
+      if (!l || !this.sk.pts[c.p]) return { segs, at: pos };
+      const a = this.P(l.a), b = this.P(l.b), P = this.P(c.p);
+      const d = norm2(sub2(b, a));
+      const k = (P[0] - a[0]) * d[0] + (P[1] - a[1]) * d[1];
+      const foot = [a[0] + d[0] * k, a[1] + d[1] * k];
+      // dimension line parallel to the measured distance, slid along the line to the label
+      const sl = (pos[0] - P[0]) * d[0] + (pos[1] - P[1]) * d[1];
+      return { segs, at: linear(P, foot, [P[0] + d[0] * sl, P[1] + d[1] * sl], [foot[0] + d[0] * sl, foot[1] + d[1] * sl]) };
+    }
+    if (c.type === 'angle') {
+      const l1 = this.ent(c.l1), l2 = this.ent(c.l2);
+      if (!l1 || !l2) return { segs, at: pos };
+      const A = this.P(l1.a), B = this.P(l1.b), C = this.P(l2.a), D = this.P(l2.b);
+      const d1 = sub2(B, A), d2 = sub2(D, C);
+      const den = d1[0] * d2[1] - d1[1] * d2[0];
+      if (Math.abs(den) < 1e-12) return { segs, at: pos };
+      const t = ((C[0] - A[0]) * d2[1] - (C[1] - A[1]) * d2[0]) / den;
+      const X = [A[0] + d1[0] * t, A[1] + d1[1] * t];
+      const r = Math.max(ar * 2, Math.hypot(pos[0] - X[0], pos[1] - X[1]));
+      // use the pair of rays (one from each line) that encloses the label
+      const ap = Math.atan2(pos[1] - X[1], pos[0] - X[0]);
+      const near = (ang) => {
+        let best = ang, bd = Infinity;
+        for (const cand of [ang, ang + Math.PI]) {
+          const dd = Math.abs(Math.atan2(Math.sin(cand - ap), Math.cos(cand - ap)));
+          if (dd < bd) (bd = dd), (best = cand);
+        }
+        return best;
+      };
+      const a1 = near(Math.atan2(d1[1], d1[0])), a2 = near(Math.atan2(d2[1], d2[0]));
+      const sw = Math.atan2(Math.sin(a2 - a1), Math.cos(a2 - a1));
+      const n = 24;
+      for (let i = 0; i < n; i++) {
+        const u0 = a1 + (sw * i) / n, u1 = a1 + (sw * (i + 1)) / n;
+        segs.push([[X[0] + r * Math.cos(u0), X[1] + r * Math.sin(u0)], [X[0] + r * Math.cos(u1), X[1] + r * Math.sin(u1)]]);
+      }
+      for (const ang of [a1, a2]) segs.push([X, [X[0] + (r + ar) * Math.cos(ang), X[1] + (r + ar) * Math.sin(ang)]]);
+      const am = a1 + sw / 2;
+      return { segs, at: [X[0] + r * Math.cos(am), X[1] + r * Math.sin(am)] };
+    }
+    return { segs, at: pos };
+  }
+  dimText(c) {
+    return (c.type === 'diameter' ? 'Ø' : c.type === 'radius' ? 'R' : '') + fmt(c.value, 3) + (c.type === 'angle' ? '°' : '');
+  }
+
+  // ---------------------------------------------------------------- typing sizes while drawing
+  // With a line / circle / rectangle in progress, typing a number opens a value box at the cursor.
+  startNumeric(ch) {
+    const t = this.tool, n = this.clicks.length;
+    if (this.numEl || !n || !['line', 'centerline', 'circle', 'rect', 'crect'].includes(t)) return false;
+    const labels = t === 'circle' ? ['Ø'] : t === 'rect' || t === 'crect' ? ['W', 'H'] : ['L'];
+    const vals = [];
+    const pos = this.vp.project(toWorld(this.pl, this.cursor));
+    const tag = el('span', { text: labels[0] });
+    const inp = el('input', { type: 'text', value: ch, inputmode: 'decimal' });
+    const wrap = el('div', { class: 'numbox', style: { left: pos[0] + 16 + 'px', top: pos[1] + 16 + 'px' } }, tag, inp, el('small', { text: labels.length > 1 ? 'Tab / Enter' : 'Enter' }));
+    this.vp.labels.append(wrap);
+    this.numEl = wrap;
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+    const close = () => {
+      wrap.remove();
+      if (this.numEl === wrap) this.numEl = null;
+    };
+    const parse = (txt) => {
+      try {
+        return Function('"use strict";return (' + txt.replace(/[^0-9+\-*/().,eE ]/g, '').replace(/,/g, '.') + ')')();
+      } catch (e) {
+        return NaN;
+      }
+    };
+    inp.addEventListener('keydown', async (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') return close();
+      if (ev.key !== 'Enter' && ev.key !== 'Tab') return;
+      ev.preventDefault();
+      const v = parse(inp.value);
+      if (!(v > 0)) return toast('Type a positive number.', true);
+      vals.push(v);
+      if (vals.length < labels.length) {
+        tag.textContent = labels[vals.length];
+        inp.value = '';
+        return;
+      }
+      close();
+      await this.applyNumeric(vals);
+    });
+    inp.addEventListener('blur', () => setTimeout(close, 0));
+    return true;
+  }
+  async applyNumeric(vals) {
+    const t = this.tool, c0 = this.clicks[0], cur = this.cursor;
+    const off = this.vp.pxSize() * 30;
+    const before = this.sk.ents.length;
+    if (t === 'line' || t === 'centerline') {
+      const prev = this.clicks[this.clicks.length - 1];
+      const sn = this.snapInfo || { x: cur[0], y: cur[1] };
+      let dx = sn.x - prev.x, dy = sn.y - prev.y, L = Math.hypot(dx, dy);
+      if (L < 1e-9) (dx = 1), (dy = 0), (L = 1);
+      const x = prev.x + (dx / L) * vals[0], y = prev.y + (dy / L) * vals[0];
+      await this.toolClick({ x, y, h: sn.h, v: sn.v });
+      const ln = this.sk.ents[this.sk.ents.length - 1];
+      if (this.sk.ents.length > before && ln.type === 'line') {
+        this.addCon({ type: 'distance', p: ln.a, q: ln.b, value: vals[0], pos: [(prev.x + x) / 2 - (dy / L) * off, (prev.y + y) / 2 + (dx / L) * off] });
+        this.changed();
+      }
+    } else if (t === 'circle') {
+      await this.toolClick({ x: c0.x + vals[0] / 2, y: c0.y });
+      const en = this.sk.ents[this.sk.ents.length - 1];
+      if (this.sk.ents.length > before && en.type === 'circle') {
+        this.addCon({ type: 'diameter', ent: en.id, value: vals[0], pos: [c0.x + vals[0] * 0.5 + off, c0.y + vals[0] * 0.5 + off] });
+        this.changed();
+      }
+    } else {
+      const sx = cur[0] >= c0.x ? 1 : -1, sy = cur[1] >= c0.y ? 1 : -1;
+      const k = t === 'crect' ? 0.5 : 1;
+      const x = c0.x + sx * vals[0] * k, y = c0.y + sy * vals[1] * k;
+      await this.toolClick({ x, y });
+      const l1 = this.sk.ents[before], l2 = this.sk.ents[before + 1];
+      if (this.sk.ents.length >= before + 4 && l1 && l2) {
+        const P = (id) => this.P(id);
+        const ylow = Math.min(P(l1.a)[1], y, 2 * c0.y - y), xhigh = Math.max(P(l2.a)[0], x, 2 * c0.x - x);
+        this.addCon({ type: 'hdistance', p: l1.a, q: l1.b, value: vals[0], pos: [(P(l1.a)[0] + P(l1.b)[0]) / 2, ylow - off] });
+        this.addCon({ type: 'vdistance', p: l2.a, q: l2.b, value: vals[1], pos: [xhigh + off, (P(l2.a)[1] + P(l2.b)[1]) / 2] });
+        this.changed();
+      }
+    }
+    this.redrawPreview();
+  }
+  // highlight what a relation ties together (used by the relation badges and the properties panel)
+  showRelHighlight(c) {
+    if (this.relObj) {
+      this.group.remove(this.relObj);
+      this.relObj.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) this.vp.lineMats.delete(o.material);
+      });
+      this.relObj = null;
+    }
+    if (!c) return this.vp.render();
+    const W = (p) => toWorld(this.pl, p);
+    const arr = [];
+    const m = this.vp.pxSize() * 7;
+    const mark = (id) => {
+      if (!this.sk.pts[id]) return;
+      const [x, y] = this.P(id);
+      arr.push(...W([x - m, y]), ...W([x, y + m]), ...W([x, y + m]), ...W([x + m, y]), ...W([x + m, y]), ...W([x, y - m]), ...W([x, y - m]), ...W([x - m, y]));
+    };
+    for (const k of ['line', 'ent', 'l1', 'l2', 'e1', 'e2']) {
+      const e = c[k] && this.ent(c[k]);
+      if (!e) continue;
+      const sg = sketchSegments({ pts: this.sk.pts, ents: [{ ...e, construction: false }] })[0];
+      if (!sg) continue;
+      const pts = segPoints(sg);
+      for (let i = 0; i < pts.length - 1; i++) arr.push(...W(pts[i]), ...W(pts[i + 1]));
+    }
+    for (const k of ['p', 'q']) if (c[k]) mark(c[k]);
+    const grp = new THREE.Group();
+    const halo = this.vp.fat(arr, 0x21c45d, 11);
+    halo.material.opacity = 0.28;
+    grp.add(halo, this.vp.fat(arr, 0x0f8f3c, 3.2));
+    this.relObj = grp;
+    this.group.add(grp);
+    this.vp.render();
+  }
+  // relations and dimensions that involve the given entity / point ids
+  relationsOf(ids) {
+    const set = new Set(ids);
+    for (const id of ids) {
+      const e = this.ent(id);
+      if (e) for (const p of [e.a, e.b, e.c, e.p, ...(e.pts || [])]) if (p) set.add(p);
+    }
+    return this.sk.cons.filter((c) => ['line', 'ent', 'l1', 'l2', 'e1', 'e2', 'p', 'q'].some((k) => c[k] && set.has(c[k])));
   }
   entDistInfinite(line, p) {
     const a = this.P(line.a), b = this.P(line.b);
@@ -1120,6 +1362,7 @@ export class Sketcher {
   redraw() {
     const vp = this.vp, g = this.group;
     vp.disposeGroup(g);
+    this.relObj = null;
     const W = (p) => toWorld(this.pl, p);
     const st = this.status();
     const base = st.dof > 0 ? COL.under : COL.full;
@@ -1140,46 +1383,12 @@ export class Sketcher {
     }
     // dimension graphics
     this.clearLabels();
-    const dimGeo = (c) => {
-      const pos = c.pos || [0, 0];
-      const E = (id) => this.ent(id);
-      if (['distance', 'hdistance', 'vdistance'].includes(c.type)) {
-        const P = this.P(c.p), Q = this.P(c.q);
-        let p2, q2;
-        if (c.type === 'hdistance') (p2 = [P[0], pos[1]]), (q2 = [Q[0], pos[1]]);
-        else if (c.type === 'vdistance') (p2 = [pos[0], P[1]]), (q2 = [pos[0], Q[1]]);
-        else {
-          const d = norm2(sub2(Q, P)), nrm = [-d[1], d[0]];
-          const off = (pos[0] - P[0]) * nrm[0] + (pos[1] - P[1]) * nrm[1];
-          p2 = [P[0] + nrm[0] * off, P[1] + nrm[1] * off];
-          q2 = [Q[0] + nrm[0] * off, Q[1] + nrm[1] * off];
-        }
-        push(buckets.dim, [P, p2]);
-        push(buckets.dim, [Q, q2]);
-        push(buckets.dim, [p2, q2]);
-        return [(p2[0] + q2[0]) / 2, (p2[1] + q2[1]) / 2];
-      }
-      if (c.type === 'radius' || c.type === 'diameter') {
-        const e = E(c.ent);
-        if (e) push(buckets.dim, [this.P(e.c), pos]);
-      } else if (c.type === 'pointLineDistance') {
-        const l = E(c.line);
-        if (l) {
-          const r = this.entDist(l, this.P(c.p));
-          const a = this.P(l.a), b = this.P(l.b), P = this.P(c.p);
-          const d = norm2(sub2(b, a));
-          const k = (P[0] - a[0]) * d[0] + (P[1] - a[1]) * d[1];
-          push(buckets.dim, [P, [a[0] + d[0] * k, a[1] + d[1] * k]]);
-        }
-      }
-      return pos;
-    };
     for (const c of this.sk.cons) {
       if (!DIMS.includes(c.type)) continue;
-      const at = dimGeo(c);
-      const pre = c.type === 'diameter' ? 'Ø' : c.type === 'radius' ? 'R' : '';
-      const suf = c.type === 'angle' ? '°' : '';
-      const d = el('div', { class: 'dimlabel', text: pre + fmt(c.value, 3) + suf, title: 'Double-click to edit, Delete to remove' });
+      const gfx = this.dimGraphics(c);
+      for (const sg of gfx.segs) push(buckets.dim, sg);
+      const at = gfx.at;
+      const d = el('div', { class: 'dimlabel', text: this.dimText(c), title: 'Double-click to edit · drag to move · Delete to remove' });
       d.addEventListener('dblclick', (ev) => {
         ev.stopPropagation();
         this.editDimension(c);
@@ -1208,31 +1417,51 @@ export class Sketcher {
       this.vp.labels.append(d);
       this.labelEls.push({ el: d, p: W(at), con: c.id });
     }
-    // relation glyphs
+    // relation badges: one green tile per relation on every entity it involves
     const seen = {};
-    for (const c of this.sk.cons) {
-      if (DIMS.includes(c.type) || !GLYPH[c.type]) continue;
-      if (c.type === 'pointOnLine' || c.type === 'pointOnCircle' || c.type === 'coincident') continue;
-      let at = null;
-      const e = this.ent(c.line || c.e1 || c.l1 || c.ent);
-      if (e && e.type === 'line') {
-        const a = this.P(e.a), b = this.P(e.b);
-        at = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      } else if (e && e.c) at = this.P(e.c);
-      else if (c.p && this.sk.pts[c.p]) at = this.P(c.p);
-      if (!at) continue;
+    const badge = (c, at, small) => {
       const key = at.map((x) => x.toFixed(3)).join(',');
-      seen[key] = (seen[key] || 0) + 1;
-      const d = el('div', { class: 'dimlabel', text: GLYPH[c.type], title: c.type + ' (click, then Delete to remove)', style: { background: 'rgba(214,240,214,.9)', color: '#1d6b2a', fontSize: '11px', marginLeft: seen[key] * 14 + 'px', marginTop: '-12px' } });
+      const n = (seen[key] = (seen[key] || 0) + 1);
+      const d = el('div', { class: 'relbadge' + (small ? ' small' : '') + (this.sel.has(c.id) ? ' sel' : ''), text: GLYPH[c.type], title: REL_NAME[c.type] + ' – click to select, Delete to remove', style: { marginLeft: 12 + (n - 1) * 19 + 'px', marginTop: '-15px' } });
+      d.addEventListener('pointerenter', () => this.showRelHighlight(c));
+      d.addEventListener('pointerleave', () => this.showRelHighlight(null));
       d.addEventListener('pointerdown', (ev) => {
         ev.stopPropagation();
-        this.sel.clear();
+        if (!(ev.ctrlKey || ev.shiftKey)) this.sel.clear();
         this.sel.add(c.id);
         this.redraw();
+        this.onChange('selection');
       });
-      if (this.sel.has(c.id)) d.style.outline = '2px solid #00a8f0';
       this.vp.labels.append(d);
       this.labelEls.push({ el: d, p: W(at) });
+    };
+    const anchorOf = (e) => {
+      if (e.type === 'line') {
+        const a = this.P(e.a), b = this.P(e.b);
+        return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      }
+      if (e.type === 'circle') return [this.P(e.c)[0] + e.r * 0.7071, this.P(e.c)[1] + e.r * 0.7071];
+      if (e.type === 'arc') {
+        const sg = sketchSegments({ pts: this.sk.pts, ents: [{ ...e, construction: false }] })[0];
+        if (sg) {
+          const t = sg.a1 + sg.sweep / 2;
+          return [sg.c[0] + sg.r * Math.cos(t), sg.c[1] + sg.r * Math.sin(t)];
+        }
+      }
+      return e.c ? this.P(e.c) : null;
+    };
+    for (const c of this.sk.cons) {
+      if (DIMS.includes(c.type) || !GLYPH[c.type]) continue;
+      const pointy = ['pointOnLine', 'pointOnCircle', 'coincident', 'midpoint', 'fix', 'symmetric'].includes(c.type);
+      if (pointy) {
+        for (const k of ['p', 'q']) if (c[k] && this.sk.pts[c[k]] && c[k] !== 'origin') badge(c, this.P(c[k]), c.type !== 'fix' && c.type !== 'symmetric');
+        continue;
+      }
+      for (const k of ['line', 'ent', 'l1', 'l2', 'e1', 'e2']) {
+        const e = c[k] && this.ent(c[k]);
+        const at = e && anchorOf(e);
+        if (at) badge(c, at, false);
+      }
     }
     g.add(vp.fat(buckets.norm, base, 2), vp.fat(buckets.cons, COL.cons, 1.3, true), vp.fat(buckets.dim, COL.dim, 1), vp.fat(buckets.hov, COL.hover, 3), vp.fat(buckets.sel, COL.sel, 3));
     // points
@@ -1262,6 +1491,21 @@ export class Sketcher {
     }
     vp.render();
   }
+  setLive(text, at) {
+    if (!text) {
+      if (this.liveEl) this.liveEl.remove();
+      this.liveEl = null;
+      return;
+    }
+    if (!this.liveEl) {
+      this.liveEl = el('div', { class: 'livelabel' });
+      this.vp.labels.append(this.liveEl);
+    }
+    const p = this.vp.project(toWorld(this.pl, at));
+    this.liveEl.textContent = text;
+    this.liveEl.style.left = p[0] + 16 + 'px';
+    this.liveEl.style.top = p[1] - 26 + 'px';
+  }
   updateLabels() {
     for (const l of this.labelEls) {
       const s = this.vp.project(l.p);
@@ -1279,7 +1523,11 @@ export class Sketcher {
       this.previewObj = null;
     }
     const s = this.snapInfo, n = this.clicks.length;
-    if (!s || this.tool === 'select') return this.vp.render();
+    if (!s || this.tool === 'select') {
+      this.setLive(null);
+      return this.vp.render();
+    }
+    let live = null;
     const W = (p) => toWorld(this.pl, p);
     const arr = [];
     const poly = (pts) => {
@@ -1330,6 +1578,25 @@ export class Sketcher {
         }
       } else if (t === 'spline') poly([...this.clicks.map((c) => [c.x, c.y]), cur]);
     }
+    // live size readout next to the cursor (and the Smart Dimension preview)
+    if (n) {
+      const f0 = [c0.x, c0.y], last = this.clicks[n - 1], t = this.tool;
+      if (t === 'line' || t === 'centerline') {
+        const dx = cur[0] - last.x, dy = cur[1] - last.y;
+        live = `${fmt(Math.hypot(dx, dy), 2)}  ∠${fmt((Math.atan2(dy, dx) * 180) / Math.PI, 1)}°`;
+      } else if (t === 'circle') live = 'Ø' + fmt(2 * Math.hypot(cur[0] - f0[0], cur[1] - f0[1]), 2);
+      else if (t === 'rect') live = `${fmt(Math.abs(cur[0] - f0[0]), 2)} × ${fmt(Math.abs(cur[1] - f0[1]), 2)}`;
+      else if (t === 'crect') live = `${fmt(2 * Math.abs(cur[0] - f0[0]), 2)} × ${fmt(2 * Math.abs(cur[1] - f0[1]), 2)}`;
+      else if (t === 'polygon' || t === 'arcc') live = 'R' + fmt(Math.hypot(cur[0] - f0[0], cur[1] - f0[1]), 2);
+      else if (t === 'dimension') {
+        const con = this.dimSpec(this.clicks, cur);
+        if (con) {
+          for (const sg of this.dimGraphics(con).segs) poly(sg);
+          live = this.dimText(con);
+        }
+      }
+    }
+    this.setLive(live, cur);
     const grp = new THREE.Group();
     grp.add(this.vp.fat(arr, COL.preview, 1.6));
     // snap marker

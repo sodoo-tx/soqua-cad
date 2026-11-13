@@ -467,7 +467,10 @@ export function enterSketch(featureId, isNew = false) {
   app.vp.normalTo(plane);
   app.sketcher = new Sketcher(app.vp, f.params.sketch, plane, {
     onChange: (what) => {
-      if (what === 'tool' || what === 'selection') buildRibbon();
+      if (what === 'tool' || what === 'selection') {
+        buildRibbon();
+        run('skProps'); // properties panel follows the sketch selection
+      }
     },
   });
   setSelection([]);
@@ -489,6 +492,7 @@ export function exitSketch(keep = true) {
   if (!app.sketcher) return null;
   const doc = app.doc, ed = app.sketchEdit;
   const f = doc.get(ed.id);
+  if (pmActive() && pmActive().spec.sketchProps) closePM(false);
   app.sketcher.destroy();
   app.sketcher = null;
   app.sketchEdit = null;

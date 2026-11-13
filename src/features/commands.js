@@ -5,6 +5,8 @@ import { V, BASE_PLANES, fmt, toLocal } from '../geom.js';
 import { SECTIONS } from './weldments.js';
 import { flatPattern } from './sheetmetal.js';
 import { emptySketch } from '../doc.js';
+import { REL_NAME as sk_REL } from '../sketch/sketcher.js';
+const sk_GLYPH = (t) => ({ horizontal: '━', vertical: '┃', parallel: '∥', perpendicular: '⊥', equal: '=', tangent: '⌒', concentric: '◎', coincident: '●', collinear: '⫽', midpoint: '◐', fix: '⚓', symmetric: '⇔', pointOnLine: '●', pointOnCircle: '●' }[t] || '•');
 import * as K from '../kernel.js';
 
 const END = [['blind', 'Blind'], ['mid', 'Mid Plane'], ['through', 'Through All'], ['throughBoth', 'Through All - Both'], ['twoDir', 'Two Directions']];
@@ -673,6 +675,7 @@ register('skTool', (t) => {
   }
   app.sketcher.setTool(t);
   buildRibbon();
+  run('skProps');
 });
 register('skOffset', async () => {
   const d = parseFloat(await promptDlg('Offset Entities', 'Offset distance in mm (negative = other side):', '5'));
@@ -726,6 +729,84 @@ register('skRelation', () => {
   popup(rel.map((t) => ({ label: names[t], icon: 'relation', action: () => sk.addRelation(t) })), Math.min(innerWidth - 220, r.left + r.width / 2), r.bottom);
 });
 register('skConstruction', () => app.sketcher.toggleConstruction());
+
+// Sketch entity properties: existing relations (hover to see, × to delete), relations that can be added, parameters
+const SK_TYPE = { line: 'Line Properties', circle: 'Circle', arc: 'Arc', spline: 'Spline', point: 'Point', text: 'Sketch Text' };
+register('skProps', () => {
+  const sk = app.sketcher;
+  const mine = () => pmActive() && pmActive().spec.sketchProps;
+  if (!sk || sk.tool !== 'select' || innerWidth < 760) return mine() && closePM(false);
+  const { ents, pts } = sk.selectionParts();
+  const picked = [...sk.sel];
+  const cons = picked.map((id) => sk.sk.cons.find((x) => x.id === id)).filter(Boolean);
+  if (!ents.length && !pts.length && !cons.length) return mine() && closePM(false);
+  const rels = cons.length && !ents.length && !pts.length ? cons : sk.relationsOf(picked);
+  const names = { horizontal: 'Horizontal', vertical: 'Vertical', coincident: 'Coincident', parallel: 'Parallel', perpendicular: 'Perpendicular', equal: 'Equal', collinear: 'Collinear', concentric: 'Concentric', tangent: 'Tangent', midpoint: 'Midpoint', symmetric: 'Symmetric', fix: 'Fix' };
+  const again = () => setTimeout(() => run('skProps'), 0);
+  const title = ents.length === 1 && !pts.length ? SK_TYPE[ents[0].type] || 'Properties' : pts.length === 1 && !ents.length ? 'Point' : cons.length && !ents.length && !pts.length ? 'Relation' : 'Properties';
+  const P = (id) => sk.sk.pts[id];
+  const info = () => {
+    const rows = [];
+    if (ents.length === 1 && !pts.length) {
+      const e = ents[0];
+      if (e.type === 'line') {
+        const a = P(e.a), b = P(e.b);
+        rows.push(['Length', fmt(Math.hypot(b.x - a.x, b.y - a.y), 3) + ' mm'], ['Angle', fmt((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI, 2) + '°'], ['Start', `${fmt(a.x, 3)}, ${fmt(a.y, 3)}`], ['End', `${fmt(b.x, 3)}, ${fmt(b.y, 3)}`]);
+      } else if (e.type === 'circle') rows.push(['Diameter', fmt(e.r * 2, 3) + ' mm'], ['Radius', fmt(e.r, 3) + ' mm'], ['Center', `${fmt(P(e.c).x, 3)}, ${fmt(P(e.c).y, 3)}`]);
+      else if (e.type === 'arc') rows.push(['Radius', fmt(Math.hypot(P(e.a).x - P(e.c).x, P(e.a).y - P(e.c).y), 3) + ' mm'], ['Center', `${fmt(P(e.c).x, 3)}, ${fmt(P(e.c).y, 3)}`]);
+      else if (e.type === 'text') rows.push(['Text', esc(e.text)], ['Height', fmt(e.height || 10, 2) + ' mm']);
+    } else if (pts.length === 1 && !ents.length) rows.push(['X', fmt(P(pts[0]).x, 3) + ' mm'], ['Y', fmt(P(pts[0]).y, 3) + ' mm']);
+    else if (pts.length === 2 && !ents.length) rows.push(['Distance', fmt(Math.hypot(P(pts[0]).x - P(pts[1]).x, P(pts[0]).y - P(pts[1]).y), 3) + ' mm']);
+    else rows.push(['Selected', `${ents.length} entities, ${pts.length} points`]);
+    return `<div class="kv">${rows.map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('')}</div>`;
+  };
+  openPM({
+    title, icon: 'relation', noOK: true, sketchProps: true,
+    fields: [
+      { key: 'rels', group: 'Existing Relations', type: 'custom', render: () => {
+        const box = el('div', { class: 'rellist' });
+        if (!rels.length) box.append(el('div', { class: 'ph', text: 'No relations yet. This geometry is free to move.' }));
+        for (const r of rels) {
+          const isDim = r.value !== undefined;
+          const row = el('div', { class: 'relrow' }, el('span', { class: 'relbadge inline', text: isDim ? '↔' : '' }), el('span', { class: 'nm', text: (sk_REL[r.type] || r.type) + (isDim ? '  ' + sk.dimText(r) : '') }), el('button', { class: 'btn', text: '×', title: 'Delete this relation', onclick: () => {
+            sk.showRelHighlight(null);
+            sk.checkpoint();
+            sk.sk.cons = sk.sk.cons.filter((x) => x.id !== r.id);
+            sk.sel.delete(r.id);
+            sk.changed();
+            again();
+          } }));
+          if (!isDim) row.firstChild.textContent = sk_GLYPH(r.type);
+          row.addEventListener('pointerenter', () => sk.showRelHighlight(r));
+          row.addEventListener('pointerleave', () => sk.showRelHighlight(null));
+          box.append(row);
+        }
+        return box;
+      } },
+      { key: 'add', group: 'Add Relations', type: 'custom', render: () => {
+        const avail = sk.availableRelations();
+        const box = el('div', { class: 'btnrow' });
+        if (!avail.length) box.append(el('div', { class: 'ph', text: 'Select one or more entities or points (Ctrl+click) to see the relations that apply.' }));
+        for (const t of avail) box.append(el('button', { class: 'btn', text: names[t] || t, onclick: () => {
+          sk.addRelation(t);
+          again();
+        } }));
+        return box;
+      } },
+      { key: 'par', group: 'Parameters', type: 'info', html: info },
+      { key: 'opt', group: 'Options', type: 'custom', render: () => {
+        const box = el('div', { class: 'btnrow' });
+        if (ents.length) box.append(el('button', { class: 'btn', text: ents.every((e) => e.construction) ? 'Make normal geometry' : 'For construction', onclick: () => {
+          sk.toggleConstruction();
+          again();
+        } }));
+        box.append(el('button', { class: 'btn', text: 'Delete', onclick: () => sk.deleteSelection() }));
+        return box;
+      } },
+    ],
+    onClose: () => sk.showRelHighlight && app.sketcher === sk && sk.showRelHighlight(null),
+  }, {});
+});
 
 // ---------------------------------------------------------------- hole wizard
 function holeDialog(existing) {
