@@ -493,6 +493,8 @@ export function exitSketch(keep = true) {
   const doc = app.doc, ed = app.sketchEdit;
   const f = doc.get(ed.id);
   if (pmActive() && pmActive().spec.sketchProps) closePM(false);
+  const skbar = document.getElementById('skbar');
+  if (skbar) skbar.hidden = true;
   app.sketcher.destroy();
   app.sketcher = null;
   app.sketchEdit = null;

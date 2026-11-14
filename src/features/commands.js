@@ -828,11 +828,52 @@ const SK_TYPE = { line: 'Line Properties', circle: 'Circle', arc: 'Arc', spline:
 register('skProps', () => {
   const sk = app.sketcher;
   const mine = () => pmActive() && pmActive().spec.sketchProps;
-  if (!sk || sk.tool !== 'select' || innerWidth < 760) return mine() && closePM(false);
+  // small screens get a compact bar over the bottom of the sketch instead of the side panel
+  let bar = document.getElementById('skbar');
+  if (!bar) {
+    bar = el('div', { id: 'skbar', hidden: true });
+    document.getElementById('view').append(bar);
+  }
+  const hideBar = () => {
+    bar.hidden = true;
+    bar.innerHTML = '';
+  };
+  if (!sk || sk.tool !== 'select') {
+    hideBar();
+    return mine() && closePM(false);
+  }
   const { ents, pts } = sk.selectionParts();
   const picked = [...sk.sel];
   const cons = picked.map((id) => sk.sk.cons.find((x) => x.id === id)).filter(Boolean);
-  if (!ents.length && !pts.length && !cons.length) return mine() && closePM(false);
+  if (!ents.length && !pts.length && !cons.length) {
+    hideBar();
+    return mine() && closePM(false);
+  }
+  if (innerWidth < 760) {
+    const relNames = { horizontal: 'Horizontal', vertical: 'Vertical', coincident: 'Coincident', parallel: 'Parallel', perpendicular: 'Perpendicular', equal: 'Equal', collinear: 'Collinear', concentric: 'Concentric', tangent: 'Tangent', midpoint: 'Midpoint', symmetric: 'Symmetric', fix: 'Fix' };
+    const redo = () => setTimeout(() => run('skProps'), 0);
+    bar.innerHTML = '';
+    bar.hidden = false;
+    const what = cons.length && !ents.length && !pts.length ? 'relation' : [ents.length && ents.length + (ents.length === 1 ? ' entity' : ' entities'), pts.length && pts.length + (pts.length === 1 ? ' point' : ' points')].filter(Boolean).join(' + ');
+    bar.append(el('span', { class: 'cap', text: what + ' selected' + (ents.length + pts.length ? ' – add relation:' : '') }));
+    for (const t of sk.availableRelations()) bar.append(el('button', { class: 'btn primary', text: relNames[t] || t, onclick: () => {
+      sk.addRelation(t);
+      sk.sel.clear();
+      sk.redraw();
+      redo();
+    } }));
+    if (ents.length) bar.append(el('button', { class: 'btn', text: 'Construction', onclick: () => {
+      sk.toggleConstruction();
+      redo();
+    } }));
+    bar.append(el('button', { class: 'btn', text: 'Delete', onclick: () => sk.deleteSelection() }), el('button', { class: 'btn', text: '✕', title: 'Clear selection', onclick: () => {
+      sk.sel.clear();
+      sk.redraw();
+      redo();
+    } }));
+    return mine() && closePM(false);
+  }
+  hideBar();
   const rels = cons.length && !ents.length && !pts.length ? cons : sk.relationsOf(picked);
   const names = { horizontal: 'Horizontal', vertical: 'Vertical', coincident: 'Coincident', parallel: 'Parallel', perpendicular: 'Perpendicular', equal: 'Equal', collinear: 'Collinear', concentric: 'Concentric', tangent: 'Tangent', midpoint: 'Midpoint', symmetric: 'Symmetric', fix: 'Fix' };
   const again = () => setTimeout(() => run('skProps'), 0);

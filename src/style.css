@@ -260,3 +260,15 @@ body.no-anim *, body.no-anim *::before, body.no-anim *::after { animation: none 
 .numbox small { color: #8793a0; font-size: 10px; }
 .dimlabel { font-size: 13px; padding: 1px 4px; border: 1px solid transparent; }
 .dimlabel:hover { border-color: #e0a000; }
+
+/* phone: relation bar over the bottom of the sketch, bigger relation tiles and dimension labels */
+#skbar { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 6; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; background: rgba(255,255,255,.96); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.25); animation: soq-rise .18s ease both; }
+#skbar .cap { flex: 1 0 100%; color: var(--mute); font-size: 12px; }
+#skbar .btn { min-height: 40px; padding: 6px 12px; font-size: 13px; }
+@media (pointer: coarse) {
+  .relbadge { min-width: 24px; height: 24px; font-size: 14px; }
+  .relbadge.small { min-width: 16px; height: 16px; font-size: 9px; }
+  .dimlabel { font-size: 15px; padding: 3px 7px; }
+  .livelabel { font-size: 14px; padding: 4px 8px; }
+  #corner button { width: 52px; height: 52px; }
+}

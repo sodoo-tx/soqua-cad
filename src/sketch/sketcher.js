@@ -25,6 +25,7 @@ export class Sketcher {
     this.tool = 'select';
     this.clicks = [];
     this.cursor = [0, 0];
+    this.touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches; // refined on every pointer event
     this.snapInfo = null;
     this.undoStack = [];
     this.group = vp.groups.active;
@@ -55,8 +56,16 @@ export class Sketcher {
   ent(id) {
     return this.sk.ents.find((e) => e.id === id);
   }
+  // catch radius in sketch units: generous for a mouse, finger-sized on touch screens
   tol() {
-    return this.vp.pxSize() * 9;
+    return this.vp.pxSize() * (this.touch ? 26 : 13);
+  }
+  // sketch-plane point for a pointer event. While a finger is dragging a drawing tool the cursor is
+  // lifted above the fingertip so the snap marker stays visible.
+  evPoint(e, lifted) {
+    if (e.pointerType) this.touch = e.pointerType === 'touch';
+    const ev = lifted && this.touch ? { clientX: e.clientX, clientY: e.clientY - 52 } : e;
+    return this.vp.planePoint(ev, this.pl);
   }
   addPt(x, y, extra = {}) {
     const id = uid('p');
@@ -182,54 +191,118 @@ export class Sketcher {
     }
     return best;
   }
-  // snap the cursor for drawing. returns {x, y, pt?, on?, h?, v?}
-  snap(p, skipPts = []) {
+  // Magnetic snap for the cursor. Returns { x, y, kind, label, pt?, on?, on2?, mid?, h?, v?, guides? }.
+  // Priority: points > midpoints > circle quadrants > intersections > on an entity > alignment.
+  snap(p, skipPts = [], skipEnts = []) {
     const tol = this.tol();
-    const h = this.hit(p, { skipPts });
-    if (h && h.kind === 'pt') {
-      const q = this.sk.pts[h.id];
-      return { x: q.x, y: q.y, pt: h.id, kind: 'endpoint' };
+    const d2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const ents = this.sk.ents.filter((e) => !skipEnts.includes(e.id));
+    // 1. existing points (endpoints, centres, the origin)
+    let bp = null, bd = tol;
+    for (const [id, q] of Object.entries(this.sk.pts)) {
+      if (skipPts.includes(id)) continue;
+      const d = Math.hypot(q.x - p[0], q.y - p[1]);
+      if (d < bd) (bd = d), (bp = id);
     }
-    // midpoints
-    for (const e of this.sk.ents) {
+    if (bp) {
+      const q = this.sk.pts[bp];
+      const isCenter = this.sk.ents.some((e) => e.c === bp);
+      return { x: q.x, y: q.y, pt: bp, kind: isCenter ? 'center' : 'endpoint', label: bp === 'origin' ? 'Origin' : isCenter ? 'Center' : 'Endpoint' };
+    }
+    // 2. midpoints of lines
+    for (const e of ents) {
       if (e.type !== 'line' || skipPts.includes(e.a) || skipPts.includes(e.b)) continue;
       const a = this.P(e.a), b = this.P(e.b);
       const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      if (Math.hypot(m[0] - p[0], m[1] - p[1]) < tol) return { x: m[0], y: m[1], mid: e.id, kind: 'midpoint' };
+      if (d2(m, p) < tol) return { x: m[0], y: m[1], mid: e.id, kind: 'midpoint', label: 'Midpoint' };
     }
-    if (h && h.kind === 'ent') {
-      const e = this.ent(h.id);
-      if (e.type === 'line' || e.type === 'circle' || e.type === 'arc') return { x: h.q[0], y: h.q[1], on: e.id, kind: 'on' };
-    }
-    const out = { x: p[0], y: p[1] };
-    const last = this.clicks.length ? this.clicks[this.clicks.length - 1] : null;
-    if (last && ['line', 'centerline'].includes(this.tool)) {
-      if (Math.abs(p[1] - last.y) < tol * 0.7) {
-        out.y = last.y;
-        out.h = true;
-        out.kind = 'horizontal';
-      } else if (Math.abs(p[0] - last.x) < tol * 0.7) {
-        out.x = last.x;
-        out.v = true;
-        out.kind = 'vertical';
+    // 3. quadrant points of circles
+    for (const e of ents) {
+      if (e.type !== 'circle') continue;
+      const c = this.P(e.c);
+      for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]]) {
+        const q = [c[0] + dx * e.r, c[1] + dy * e.r];
+        if (d2(q, p) < tol * 0.8) return { x: q[0], y: q[1], on: e.id, kind: 'quadrant', label: 'Quadrant' };
       }
     }
-    // align with origin axes
-    if (!out.kind) {
-      if (Math.abs(p[0]) < tol * 0.5) out.x = 0;
-      if (Math.abs(p[1]) < tol * 0.5) out.y = 0;
+    // 4. intersections of nearby entities
+    const near = ents.filter((e) => ['line', 'circle', 'arc'].includes(e.type) && this.entDist(e, p).d < tol * 1.6);
+    let bi = null;
+    bd = tol;
+    for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) {
+      for (const q of intersect(this.shape(near[i]), this.shape(near[j]))) {
+        const d = d2(q, p);
+        if (d < bd) (bd = d), (bi = { x: q[0], y: q[1], on: near[i].id, on2: near[j].id, kind: 'intersection', label: 'Intersection' });
+      }
     }
+    if (bi) return bi;
+    // 5. on an entity
+    let be = null;
+    bd = tol * 0.75;
+    for (const e of ents) {
+      if (!['line', 'circle', 'arc'].includes(e.type)) continue;
+      const r = this.entDist(e, p);
+      if (r.d < bd) (bd = r.d), (be = { x: r.q[0], y: r.q[1], on: e.id, kind: 'on', label: e.type === 'line' ? 'On line' : e.type === 'arc' ? 'On arc' : 'On circle' });
+    }
+    if (be) return be;
+    // 6. free point: horizontal / vertical from the previous click, and alignment with other points
+    const out = { x: p[0], y: p[1], guides: [] };
+    const last = this.clicks.length ? this.clicks[this.clicks.length - 1] : null;
+    const lineTool = ['line', 'centerline'].includes(this.tool);
+    if (last && lineTool && last.x !== undefined) {
+      if (Math.abs(p[1] - last.y) < tol * 0.6) (out.y = last.y), (out.h = true), (out.kind = 'horizontal'), (out.label = 'Horizontal');
+      else if (Math.abs(p[0] - last.x) < tol * 0.6) (out.x = last.x), (out.v = true), (out.kind = 'vertical'), (out.label = 'Vertical');
+    }
+    let ax = null, ay = null, dxb = tol * 0.5, dyb = tol * 0.5;
+    for (const [id, q] of Object.entries(this.sk.pts)) {
+      if (skipPts.includes(id)) continue;
+      if (!out.v && Math.abs(q.x - p[0]) < dxb) (dxb = Math.abs(q.x - p[0])), (ax = q);
+      if (!out.h && Math.abs(q.y - p[1]) < dyb) (dyb = Math.abs(q.y - p[1])), (ay = q);
+    }
+    if (ax) out.x = ax.x;
+    if (ay) out.y = ay.y;
+    if (ax) out.guides.push([[ax.x, ax.y], [out.x, out.y]]);
+    if (ay) out.guides.push([[ay.x, ay.y], [out.x, out.y]]);
+    if ((ax || ay) && !out.kind) (out.kind = 'aligned'), (out.label = ax && ay ? 'Aligned (both)' : 'Aligned');
     return out;
   }
-  // make (or reuse) a point for a snap result, adding the implied relation
+  // make (or reuse) a point for a snap result, adding the implied relation(s)
   pointFor(s) {
     if (s.pt) return s.pt;
     const id = this.addPt(s.x, s.y);
-    if (s.on) {
-      const e = this.ent(s.on);
-      this.addCon(e.type === 'line' ? { type: 'pointOnLine', p: id, line: e.id } : { type: 'pointOnCircle', p: id, ent: e.id });
-    } else if (s.mid) this.addCon({ type: 'midpoint', p: id, line: s.mid });
+    const onEnt = (eid) => {
+      const e = this.ent(eid);
+      if (e) this.addCon(e.type === 'line' ? { type: 'pointOnLine', p: id, line: e.id } : { type: 'pointOnCircle', p: id, ent: e.id });
+    };
+    if (s.on) onEnt(s.on);
+    if (s.on2) onEnt(s.on2);
+    if (s.mid) this.addCon({ type: 'midpoint', p: id, line: s.mid });
     return id;
+  }
+  // screen-sized marker for a snap, drawn as line segments (sketch coordinates)
+  snapMarker(sn) {
+    const m = this.vp.pxSize() * (this.touch ? 11 : 7), x = sn.x, y = sn.y;
+    const box = [[x - m, y - m], [x + m, y - m], [x + m, y + m], [x - m, y + m], [x - m, y - m]];
+    const ring = Array.from({ length: 17 }, (_, i) => [x + m * Math.cos((i / 16) * 2 * Math.PI), y + m * Math.sin((i / 16) * 2 * Math.PI)]);
+    switch (sn.kind) {
+      case 'endpoint': return [box];
+      case 'center': return [ring, [[x - m * 0.5, y], [x + m * 0.5, y]], [[x, y - m * 0.5], [x, y + m * 0.5]]];
+      case 'midpoint': return [[[x - m, y - m * 0.8], [x + m, y - m * 0.8], [x, y + m], [x - m, y - m * 0.8]]];
+      case 'quadrant': return [[[x - m, y], [x, y + m], [x + m, y], [x, y - m], [x - m, y]]];
+      case 'intersection': return [[[x - m, y - m], [x + m, y + m]], [[x - m, y + m], [x + m, y - m]]];
+      case 'on': return [[[x - m, y - m], [x + m, y - m], [x - m, y + m], [x + m, y + m], [x - m, y - m]]];
+      default: return [[[x - m, y], [x + m, y]], [[x, y - m], [x, y + m]]];
+    }
+  }
+  // geometry of the thing the cursor is magnetised to, for a highlight
+  snapTargetPolys(sn) {
+    const polys = [];
+    for (const id of [sn.on, sn.on2, sn.mid]) {
+      const e = id && this.ent(id);
+      const sg = e && sketchSegments({ pts: this.sk.pts, ents: [{ ...e, construction: false }] })[0];
+      if (sg) polys.push(segPoints(sg));
+    }
+    return polys;
   }
 
   // ---------------------------------------------------------------- pointer events (from viewport)
@@ -239,7 +312,7 @@ export class Sketcher {
     this.preview = null;
     this.setLive(null);
     const hints = {
-      select: 'Select or drag sketch entities. Double-click a dimension to edit it.', line: 'Line: click the start point, then the next points – or type a length and press Enter. Double-click or Esc ends the chain.',
+      select: 'Select or drag sketch entities. Double-click a dimension to edit it.', line: this.touch ? 'Line: tap to place points, or drag – the cursor sits above your finger and snaps – and release.' : 'Line: click the start point, then the next points – or type a length and press Enter. Double-click or Esc ends the chain.',
       centerline: 'Centerline: click two points.', rect: 'Corner rectangle: click two opposite corners – or type width, Tab, height, Enter.', crect: 'Center rectangle: click the center, then a corner – or type width, Tab, height, Enter.',
       circle: 'Circle: click the center, then a point on the circle – or type the diameter and press Enter.', arc3: '3-point arc: click start, end, then a point on the arc.', arcc: 'Centerpoint arc: click center, start, then end.',
       polygon: 'Polygon: click the center, then a vertex.', slot: 'Straight slot: click the two centers, then drag out the width.', spline: 'Spline: click through-points; double-click to finish.',
@@ -255,7 +328,7 @@ export class Sketcher {
   }
   down(e) {
     if (e.button !== 0) return false;
-    const p = this.vp.planePoint(e, this.pl);
+    const p = this.evPoint(e, false);
     if (!p) return false;
     this.downAt = [e.clientX, e.clientY];
     this.movedFar = false;
@@ -280,17 +353,25 @@ export class Sketcher {
     return true;
   }
   move(e) {
-    const p = this.vp.planePoint(e, this.pl);
+    if (this.downAt && Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) > 4) this.movedFar = true;
+    // a finger dragging a drawing tool aims with a cursor lifted above the fingertip
+    const p = this.evPoint(e, this.tool !== 'select' && !!e.buttons && this.movedFar);
     if (!p) return;
     this.cursor = p;
-    if (this.downAt && Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) > 4) this.movedFar = true;
     const c = document.getElementById('coords');
     if (c) c.textContent = `X ${fmt(p[0])}  Y ${fmt(p[1])} mm`;
     if (this.tool === 'select') {
       if (this.dragging && this.movedFar && e.buttons) {
         const d = this.dragging;
-        if (d.kind === 'pt') this.solve({ drag: { p: d.id, x: p[0], y: p[1] } });
-        else if (d.kind === 'circle') {
+        if (d.kind === 'pt') {
+          // magnet: a dragged point is pulled onto points, midpoints and entities it can be related to
+          const own = this.sk.ents.filter((en) => [en.a, en.b, en.c, en.p, ...(en.pts || [])].includes(d.id));
+          const skipPts = [d.id, ...own.flatMap((en) => [en.a, en.b, en.c, en.p, ...(en.pts || [])].filter(Boolean))];
+          const sn = this.snap(p, skipPts, own.map((en) => en.id));
+          this.dragSnap = sn.pt || sn.on || sn.mid ? sn : null;
+          const tgt = this.dragSnap ? [sn.x, sn.y] : p;
+          this.solve({ drag: { p: d.id, x: tgt[0], y: tgt[1] } });
+        } else if (d.kind === 'circle') {
           const en = this.ent(d.id), cc = this.P(en.c);
           this.solve({ drag: { ent: d.id, r: Math.max(1e-3, Math.hypot(p[0] - cc[0], p[1] - cc[1])) } });
         } else if (d.kind === 'line') {
@@ -314,18 +395,23 @@ export class Sketcher {
     this.redrawPreview();
   }
   up(e) {
-    const p = this.vp.planePoint(e, this.pl) || this.cursor;
+    const p = this.evPoint(e, false) || this.cursor;
     if (this.tool === 'select') {
       const d = this.dragging;
       this.dragging = null;
       if (d && this.movedFar) {
         if (this.checkpointPending) this.undoStack.push(this.checkpointPending);
+        const sn = this.dragSnap;
+        this.dragSnap = null;
+        if (d.kind === 'pt' && sn) this.relateDropped(d.id, sn);
         this.changed(false);
         return;
       }
+      this.dragSnap = null;
       const h = this.dragHit;
       if (h) {
-        if (!(e.ctrlKey || e.shiftKey || e.metaKey)) this.sel.clear();
+        // on a touch screen every tap adds to the selection (there is no Ctrl key); tap empty space to clear
+        if (!(e.ctrlKey || e.shiftKey || e.metaKey || this.touch)) this.sel.clear();
         if (this.sel.has(h.id)) this.sel.delete(h.id);
         else this.sel.add(h.id);
         this.redraw();
@@ -333,7 +419,31 @@ export class Sketcher {
       }
       return;
     }
-    this.toolClick(this.snap(p), e);
+    this.toolClick(this.snap(this.evPoint(e, this.movedFar) || p), e);
+  }
+  // a point was dragged onto something: add the matching relation (coincident / midpoint / on entity)
+  relateDropped(pid, sn) {
+    const before = this.sk.cons.length;
+    const has = (pred) => this.sk.cons.some(pred);
+    if (sn.pt) {
+      if (!has((c) => c.type === 'coincident' && ((c.p === pid && c.q === sn.pt) || (c.p === sn.pt && c.q === pid)))) this.addCon({ type: 'coincident', p: pid, q: sn.pt });
+    } else if (sn.mid) {
+      if (!has((c) => c.type === 'midpoint' && c.p === pid && c.line === sn.mid)) this.addCon({ type: 'midpoint', p: pid, line: sn.mid });
+    } else {
+      for (const eid of [sn.on, sn.on2]) {
+        const e = eid && this.ent(eid);
+        if (!e) continue;
+        if (e.type === 'line' && !has((c) => c.type === 'pointOnLine' && c.p === pid && c.line === e.id)) this.addCon({ type: 'pointOnLine', p: pid, line: e.id });
+        else if (e.type !== 'line' && !has((c) => c.type === 'pointOnCircle' && c.p === pid && c.ent === e.id)) this.addCon({ type: 'pointOnCircle', p: pid, ent: e.id });
+      }
+    }
+    if (this.sk.cons.length === before) return;
+    if (!this.solve().ok) {
+      this.sk.cons.length = before;
+      this.solve();
+      return toast('That would over-define the sketch, so no relation was added.', true);
+    }
+    toast((sn.pt ? 'Coincident' : sn.mid ? 'Midpoint' : 'Coincident (' + (sn.label || 'on entity').toLowerCase() + ')') + ' relation added');
   }
   // click on empty space while select tool is active (viewport calls this when down() returned false)
   click(e) {
@@ -1475,12 +1585,22 @@ export class Sketcher {
     const pg = new THREE.BufferGeometry();
     pg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     pg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    const points = new THREE.Points(pg, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true, depthTest: false }));
+    const points = new THREE.Points(pg, new THREE.PointsMaterial({ size: this.touch ? 13 : 8, sizeAttenuation: false, vertexColors: true, depthTest: false }));
     points.renderOrder = 12;
     g.add(points);
     // sketch plane grid-less outline + axes
     const sz = Math.max(40, this.vp.halfH * 0.9);
     g.add(vp.fat([...W([-sz, 0]), ...W([sz, 0])], 0xd0312d, 0.8), vp.fat([...W([0, -sz]), ...W([0, sz])], 0x2e9e3a, 0.8));
+    // magnet feedback while a point is being dragged onto something
+    if (this.dragSnap) {
+      const sn = this.dragSnap, mk = [], tg = [];
+      for (const poly of this.snapMarker(sn)) for (let i = 0; i < poly.length - 1; i++) mk.push(...W(poly[i]), ...W(poly[i + 1]));
+      for (const poly of this.snapTargetPolys(sn)) for (let i = 0; i < poly.length - 1; i++) tg.push(...W(poly[i]), ...W(poly[i + 1]));
+      const halo = vp.fat(tg, 0xff8a00, 10);
+      halo.material.opacity = 0.3;
+      g.add(halo, vp.fat(mk, 0xff7a00, 2.4));
+      this.setLive('Release: ' + sn.label, [sn.x, sn.y]);
+    } else if (this.tool === 'select') this.setLive(null);
     this.previewObj = null;
     this.redrawPreview();
     this.updateLabels();
@@ -1524,7 +1644,7 @@ export class Sketcher {
     }
     const s = this.snapInfo, n = this.clicks.length;
     if (!s || this.tool === 'select') {
-      this.setLive(null);
+      if (!this.dragSnap) this.setLive(null);
       return this.vp.render();
     }
     let live = null;
@@ -1596,16 +1716,17 @@ export class Sketcher {
         }
       }
     }
-    this.setLive(live, cur);
+    this.setLive(s.label ? (live ? live + '  ·  ' : '') + s.label : live, cur);
     const grp = new THREE.Group();
     grp.add(this.vp.fat(arr, COL.preview, 1.6));
-    // snap marker
-    const m = this.vp.pxSize() * 5;
-    const mk = [];
-    if (s.kind) {
-      mk.push(...W([s.x - m, s.y - m]), ...W([s.x + m, s.y - m]), ...W([s.x + m, s.y - m]), ...W([s.x + m, s.y + m]), ...W([s.x + m, s.y + m]), ...W([s.x - m, s.y + m]), ...W([s.x - m, s.y + m]), ...W([s.x - m, s.y - m]));
-    }
-    grp.add(this.vp.fat(mk, 0xf0a000, 1.5));
+    // magnet feedback: a shaped marker, a glow on the entity being snapped to, dashed alignment guides
+    const mk = [], tg = [], gd = [];
+    if (s.kind) for (const pl of this.snapMarker(s)) for (let i = 0; i < pl.length - 1; i++) mk.push(...W(pl[i]), ...W(pl[i + 1]));
+    for (const pl of this.snapTargetPolys(s)) for (let i = 0; i < pl.length - 1; i++) tg.push(...W(pl[i]), ...W(pl[i + 1]));
+    for (const [a, b] of s.guides || []) gd.push(...W(a), ...W(b));
+    const halo = this.vp.fat(tg, 0xff8a00, 10);
+    halo.material.opacity = 0.3;
+    grp.add(halo, this.vp.fat(gd, 0xf0a000, 1.2, true), this.vp.fat(mk, 0xff7a00, this.touch ? 2.6 : 2));
     this.previewObj = grp;
     this.group.add(grp);
     this.vp.render();
