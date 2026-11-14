@@ -351,7 +351,7 @@ export class Sketcher {
     if (this.tool === 'line' || this.tool === 'spline' || this.tool === 'centerline') this.finishChain();
   }
   key(e) {
-    if (e.target.matches('input, textarea, select')) return;
+    if (e.target.matches?.('input, textarea, select')) return;
     if (e.key === 'Escape') {
       if (this.clicks.length) this.finishChain();
       else if (this.tool !== 'select') this.setTool('select');

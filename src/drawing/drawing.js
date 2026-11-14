@@ -543,7 +543,7 @@ class Drawing {
       this.render();
     });
     window.addEventListener('keydown', (e) => {
-      if (app.mode !== 'drawing' || e.target.matches('input, textarea, select') || !$('#modal').hidden) return;
+      if (app.mode !== 'drawing' || e.target.matches?.('input, textarea, select') || !$('#modal').hidden) return;
       if (e.key === 'Delete' || e.key === 'Backspace') run('drwDelete');
       if (e.key === 'Escape') this.setTool('select'), buildRibbon();
     });

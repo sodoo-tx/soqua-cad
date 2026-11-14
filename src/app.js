@@ -194,7 +194,7 @@ export function buildRibbon() {
 
 function onKey(e) {
   if (!$('#modal').hidden) return;
-  if (e.target.matches('input, textarea, select')) {
+  if (e.target.matches?.('input, textarea, select')) {
     // Esc still cancels the open PropertyManager while typing in one of its fields
     if (e.key === 'Escape' && pmActive() && e.target.closest('#pm')) closePM(false);
     return;

@@ -2,7 +2,9 @@
 import { app, register, run, setSelection, syncHighlight, enterSketch, exitSketch, startSketchOn, buildRibbon, buildTree, hitToItem, resolveItem } from '../app.js';
 import { openPM, closePM, pmActive, toast, setHint, el, modal, promptDlg, popup, esc } from '../ui/ui.js';
 import { V, BASE_PLANES, fmt, toLocal } from '../geom.js';
-import { SECTIONS } from './weldments.js';
+import { SECTIONS, STANDARD_SIZES, sectionLoops, sectionArea, profileLabel } from './weldments.js';
+import { start3DSketch } from '../sketch/sketch3d.js';
+import { MATERIALS } from '../sim/fea.js';
 import { flatPattern } from './sheetmetal.js';
 import { emptySketch } from '../doc.js';
 import { REL_NAME as sk_REL } from '../sketch/sketcher.js';
@@ -117,19 +119,48 @@ D.surfPlanar = {
   fromParams: (p) => ({ sketch: [sketchItem(p.sketch)].filter(Boolean) }), toParams: (v) => (v.sketch.length ? { sketch: v.sketch[0].id } : null),
 };
 
+// edges picked directly, plus every edge of each picked face (captured once, at pick time)
+const edgeSigs = (items) => {
+  const out = [], seen = new Set();
+  const add = (sig) => {
+    const k = sig.m.map((x) => x.toFixed(4)).join(',');
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(sig);
+    }
+  };
+  for (const it of items) {
+    if (it.kind === 'face') {
+      if (!it.edgeSigs && it.hit && it.hit.body && it.hit.body.shape) {
+        const f = it.hit.body.shape.faces[it.hit.index];
+        it.edgeSigs = f ? f.edges.map((e) => K.edgeSig(e)) : [];
+      }
+      (it.edgeSigs || []).forEach(add);
+    } else if (it.sig) add(it.sig);
+  }
+  return out;
+};
+const edgeOrFace = () => app.selection.filter((i) => i.kind === 'edge' || i.kind === 'face');
 D.fillet = {
-  title: 'Fillet', icon: 'fillet',
-  fields: [{ key: 'edges', label: 'Edges', group: 'Items To Fillet', type: 'sel', accept: ['edge'], placeholder: 'Select edges' }, { key: 'radius', label: 'Radius (mm)', group: 'Fillet Parameters', type: 'number', min: 0 }],
-  init: () => ({ edges: sel('edge'), radius: 5 }),
+  title: 'Fillet', icon: 'fillet', message: 'Select edges, or a face to round all of its edges.',
+  fields: [{ key: 'edges', label: 'Edges / faces', group: 'Items To Fillet', type: 'sel', accept: ['edge', 'face'], placeholder: 'Select edges or faces' }, { key: 'radius', label: 'Radius (mm)', group: 'Fillet Parameters', type: 'number', min: 0 }],
+  init: () => ({ edges: edgeOrFace(), radius: 5 }),
   fromParams: (p) => ({ edges: sigItems('edge', p.edges), radius: p.radius }),
-  toParams: (v) => (v.edges.length && v.radius > 0 ? { edges: v.edges.map((e) => e.sig), radius: v.radius } : null),
+  toParams: (v) => {
+    const edges = edgeSigs(v.edges);
+    return edges.length && v.radius > 0 ? { edges, radius: v.radius } : null;
+  },
 };
 D.chamfer = {
   title: 'Chamfer', icon: 'chamfer',
-  fields: [{ key: 'edges', label: 'Edges', group: 'Items To Chamfer', type: 'sel', accept: ['edge'], placeholder: 'Select edges' }, { key: 'distance', label: 'Distance (mm)', group: 'Chamfer Parameters', type: 'number', min: 0 }],
-  init: () => ({ edges: sel('edge'), distance: 2 }),
+  message: 'Select edges, or a face to chamfer all of its edges.',
+  fields: [{ key: 'edges', label: 'Edges / faces', group: 'Items To Chamfer', type: 'sel', accept: ['edge', 'face'], placeholder: 'Select edges or faces' }, { key: 'distance', label: 'Distance (mm)', group: 'Chamfer Parameters', type: 'number', min: 0 }],
+  init: () => ({ edges: edgeOrFace(), distance: 2 }),
   fromParams: (p) => ({ edges: sigItems('edge', p.edges), distance: p.distance }),
-  toParams: (v) => (v.edges.length && v.distance > 0 ? { edges: v.edges.map((e) => e.sig), distance: v.distance } : null),
+  toParams: (v) => {
+    const edges = edgeSigs(v.edges);
+    return edges.length && v.distance > 0 ? { edges, distance: v.distance } : null;
+  },
 };
 D.shell = {
   title: 'Shell', icon: 'shell',
@@ -309,31 +340,80 @@ D.edgeFlange = {
   toParams: (v) => (v.edge.length ? { edge: v.edge[0].sig, length: v.length, angle: v.angle } : null),
   message: 'Pick the edge on the side the flange should rise towards (the top edge to bend up, the bottom edge to bend down).',
 };
+const sizeOptions = (type) => [...(STANDARD_SIZES[type] || []).map((s) => [s.label, s.label]), ['custom', 'Custom size…']];
+const memberProfile = (v) => {
+  const std = v.size !== 'custom' && (STANDARD_SIZES[v.ptype] || []).find((s) => s.label === v.size);
+  if (std) {
+    const { label, ...dims } = std;
+    return { type: v.ptype, size: label, ...dims };
+  }
+  const f = SECTIONS[v.ptype].fields;
+  const pr = { type: v.ptype, w: v.w };
+  if (f.includes('h')) pr.h = v.h;
+  if (f.includes('t')) pr.t = v.t;
+  if (f.includes('tf')) pr.tf = v.tf;
+  return pr;
+};
+// cross-section drawing with area and weight per metre
+function profilePreview(pr) {
+  let loops;
+  try {
+    loops = sectionLoops(pr);
+  } catch (e) {
+    return '';
+  }
+  const all = [...loops.outer, ...(loops.inner || [])];
+  if (all.some((p) => !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return '<div class="ph">Enter the profile dimensions.</div>';
+  const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const pad = Math.max(x1 - x0, y1 - y0) * 0.12 + 1;
+  const path = (l) => 'M' + l.map((p) => `${p[0].toFixed(2)} ${(-p[1]).toFixed(2)}`).join('L') + 'Z';
+  const area = sectionArea(pr);
+  const rho = (MATERIALS[app.doc.material] || { density: 7850 }).density;
+  const sw = Math.max(x1 - x0, y1 - y0) / 90;
+  return `<svg viewBox="${x0 - pad} ${-y1 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}" style="width:100%;height:120px;background:#f6f8fa;border:1px solid #dfe3e8;border-radius:4px"><path d="${path(loops.outer)}${loops.inner ? path(loops.inner) : ''}" fill="#b9c4d0" fill-rule="evenodd" stroke="#27496d" stroke-width="${sw}"/></svg><div class="kv" style="margin-top:4px"><b>Size</b><span>${fmt(x1 - x0, 1)} × ${fmt(y1 - y0, 1)} mm</span><b>Area</b><span>${fmt(area, 1)} mm²</span><b>Weight</b><span>${fmt((area * rho) / 1e6, 2)} kg/m (${esc(app.doc.material)})</span></div>`;
+}
+let memberPreviewEl = null;
 D.structuralMember = {
   title: 'Structural Member', icon: 'member',
+  message: 'Places a standard section on every line of a 2D or 3D sketch. Sizes are nominal EN / ISO values – check them against your supplier\'s tables before ordering.',
   fields: [
     { ...SK('sketch', 'Path sketch', 'Path'), placeholder: 'Select a 2D or 3D sketch made of lines' },
-    { key: 'ptype', label: 'Type', group: 'Selections', type: 'select', options: Object.keys(SECTIONS) },
-    { key: 'w', label: 'Width / Ø (mm)', group: 'Selections', type: 'number', min: 0 },
-    { key: 'h', label: 'Height (mm)', group: 'Selections', type: 'number', min: 0, show: (v) => SECTIONS[v.ptype].fields.includes('h') },
-    { key: 't', label: 'Wall (mm)', group: 'Selections', type: 'number', min: 0, show: (v) => SECTIONS[v.ptype].fields.includes('t') },
+    { key: 'ptype', label: 'Type', group: 'Profile', type: 'select', options: Object.keys(SECTIONS) },
+    { key: 'size', label: 'Size', group: 'Profile', type: 'select', options: sizeOptions('Square tube') },
+    { key: 'w', label: 'Width / Ø (mm)', group: 'Profile', type: 'number', min: 0, show: (v) => v.size === 'custom' },
+    { key: 'h', label: 'Height (mm)', group: 'Profile', type: 'number', min: 0, show: (v) => v.size === 'custom' && SECTIONS[v.ptype].fields.includes('h') },
+    { key: 't', label: 'Wall / web (mm)', group: 'Profile', type: 'number', min: 0, show: (v) => v.size === 'custom' && SECTIONS[v.ptype].fields.includes('t') },
+    { key: 'tf', label: 'Flange (mm)', group: 'Profile', type: 'number', min: 0, show: (v) => v.size === 'custom' && SECTIONS[v.ptype].fields.includes('tf') },
+    { key: 'preview', group: 'Profile', type: 'custom', render: (pm) => {
+      memberPreviewEl = el('div', { html: profilePreview(memberProfile(pm.vals)) });
+      return memberPreviewEl;
+    } },
+    { key: 'angle', label: 'Rotation angle (°)', group: 'Settings', type: 'number', step: 15 },
     { key: 'miter', label: 'Mitre corners where two members meet', group: 'Settings', type: 'check' },
   ],
-  init: () => ({ sketch: initialSketch(['sketch', 'sketch3d']), ptype: 'Square tube', w: 40, h: 40, t: 3, miter: true }),
-  fromParams: (p) => ({ sketch: [sketchItem(p.sketch)].filter(Boolean), ptype: p.profile.type, w: p.profile.w, h: p.profile.h ?? p.profile.w, t: p.profile.t ?? 3, miter: p.miter !== false }),
-  toParams: (v) => {
-    if (!v.sketch.length) return null;
-    const f = SECTIONS[v.ptype].fields;
-    const profile = { type: v.ptype, w: v.w };
-    if (f.includes('h')) profile.h = v.h;
-    if (f.includes('t')) profile.t = v.t;
-    return { sketch: v.sketch[0].id, profile, miter: v.miter };
+  init: () => {
+    D.structuralMember.fields[2].options = sizeOptions('Square tube');
+    return { sketch: initialSketch(['sketch', 'sketch3d', 'helix']), ptype: 'Square tube', size: '40 x 40 x 3', w: 40, h: 40, t: 3, tf: 5, angle: 0, miter: true };
   },
+  fromParams: (p) => {
+    const pr = p.profile;
+    D.structuralMember.fields[2].options = sizeOptions(pr.type);
+    const known = pr.size && (STANDARD_SIZES[pr.type] || []).some((s) => s.label === pr.size);
+    return { sketch: [sketchItem(p.sketch)].filter(Boolean), ptype: pr.type, size: known ? pr.size : 'custom', w: pr.w, h: pr.h ?? pr.w, t: pr.t ?? 3, tf: pr.tf ?? pr.t ?? 5, angle: p.angle || 0, miter: p.miter !== false };
+  },
+  toParams: (v) => (v.sketch.length ? { sketch: v.sketch[0].id, profile: memberProfile(v), angle: v.angle, miter: v.miter } : null),
   onChange: (v, key, pm) => {
     if (key === 'ptype') {
+      D.structuralMember.fields[2].options = sizeOptions(v.ptype);
+      v.size = STANDARD_SIZES[v.ptype][Math.min(6, STANDARD_SIZES[v.ptype].length - 1)].label;
       Object.assign(v, SECTIONS[v.ptype].def);
       pm.refresh();
-    }
+    } else if (key === 'size') {
+      const std = (STANDARD_SIZES[v.ptype] || []).find((s) => s.label === v.size);
+      if (std) Object.assign(v, { w: std.w, h: std.h ?? std.w, t: std.t ?? v.t, tf: std.tf ?? std.t ?? v.tf });
+      pm.refresh();
+    } else if (memberPreviewEl && ['w', 'h', 't', 'tf'].includes(key)) memberPreviewEl.innerHTML = profilePreview(memberProfile(v));
   },
 };
 D.deleteBody = {
@@ -416,60 +496,69 @@ D.cutPlane = {
   onOpen: () => app.vp.setShowPlanes(true),
 };
 
-// 3D sketch: table of points joined into a polyline
+// 3D sketch: draw in the graphics area (see sketch/sketch3d.js); the table shows and edits exact coordinates
+let tool3d = null;
 D.sketch3d = {
-  title: '3DSketch', icon: 'sketch3d', message: 'Type coordinates or click model vertices to add points. Consecutive points are joined by lines (use it for sweep paths and weldment frames).',
+  title: '3DSketch', icon: 'sketch3d',
+  message: 'Click in the graphics area to draw connected lines in 3D. Points snap to the model and lock to the X / Y / Z axes; Tab switches the working plane (XY, XZ, YZ); type a number for an exact length; Esc or double-click ends a chain. Coordinates can be edited in the table.',
   fields: [
-    { key: 'pick', label: 'Add from model', group: 'Points', type: 'sel', accept: ['vertex'], placeholder: 'Click vertices to append them' },
     { key: 'table', group: 'Points', type: 'custom', render: (pm) => pointsTable(pm) },
-    { key: 'closed', label: 'Close the loop', group: 'Points', type: 'check' },
+    { key: 'info', group: 'Points', type: 'info', html: (v) => `<span style="color:#5d6b7a">${v.pts.length} points, ${v.lines.length} lines</span>` },
   ],
-  init: () => ({ pick: [], pts: [[0, 0, 0], [0, 0, 100], [100, 0, 100]], closed: false }),
-  fromParams: (p) => ({ pick: [], pts: p.pts.map((q) => [...q]), closed: p.lines.length === p.pts.length && p.pts.length > 2 }),
+  init: () => ({ pts: [], lines: [] }),
+  fromParams: (p) => ({ pts: p.pts.map((q) => [...q]), lines: (p.lines || []).map((l) => [...l]) }),
   toParams: (v) => {
-    const pts = v.pts.filter((q) => q.every(Number.isFinite));
-    if (pts.length < 2) return null;
-    const lines = pts.slice(1).map((_, i) => [i, i + 1]);
-    if (v.closed && pts.length > 2) lines.push([pts.length - 1, 0]);
-    return { pts, lines };
+    const lines = v.lines.filter(([a, b]) => v.pts[a] && v.pts[b] && a !== b);
+    return lines.length ? { pts: v.pts.map((q) => [...q]), lines: lines.map((l) => [...l]) } : null;
   },
-  onChange: (v, key, pm) => {
-    if (key === 'pick' && v.pick.length) {
-      for (const it of v.pick) v.pts.push([...it.point]);
-      v.pick = [];
+  afterOpen: (pm) => {
+    tool3d = start3DSketch(app.vp, pm.vals, () => {
       pm.refresh();
-    }
+      pm.spec.onChange(pm.vals, 'table', pm);
+    });
+  },
+  onClosed: () => {
+    if (tool3d) tool3d.stop();
+    tool3d = null;
   },
 };
 function pointsTable(pm) {
   const v = pm.vals;
   const wrap = el('div');
+  const touch = () => {
+    if (tool3d) tool3d.reset();
+    pm.spec.onChange(v, 'table', pm);
+  };
+  if (!v.pts.length) wrap.append(el('div', { class: 'ph', style: { color: '#8793a0', marginBottom: '6px' }, text: 'No points yet – click in the graphics area to start drawing.' }));
   const tbl = el('table', { class: 'grid' }, el('tr', {}, el('th', { text: '#' }), el('th', { text: 'X' }), el('th', { text: 'Y' }), el('th', { text: 'Z' }), el('th', {})));
   v.pts.forEach((p, i) => {
     const tr = el('tr', {}, el('td', { text: String(i + 1) }));
-    p.forEach((c, k) => {
-      const inp = el('input', { type: 'number', value: c, step: 'any' });
+    p.forEach((val, k) => {
+      const inp = el('input', { type: 'number', value: val, step: 'any' });
       inp.addEventListener('input', () => {
         const x = parseFloat(inp.value);
         if (Number.isFinite(x)) {
           p[k] = x;
-          pm.spec.onChange(v, 'table', pm);
+          touch();
         }
       });
       tr.append(el('td', {}, inp));
     });
-    tr.append(el('td', {}, el('button', { class: 'btn', text: '×', style: { minHeight: '20px', padding: '0 6px' }, onclick: () => {
+    tr.append(el('td', {}, el('button', { class: 'btn', text: '×', title: 'Delete this point and its lines', style: { minHeight: '20px', padding: '0 6px' }, onclick: () => {
       v.pts.splice(i, 1);
+      v.lines = v.lines.filter(([a, b]) => a !== i && b !== i).map(([a, b]) => [a > i ? a - 1 : a, b > i ? b - 1 : b]);
       pm.refresh();
-      pm.spec.onChange(v, 'table', pm);
+      touch();
     } })));
     tbl.append(tr);
   });
-  wrap.append(tbl, el('div', { class: 'btnrow' }, el('button', { class: 'btn', text: '+ Add point', onclick: () => {
+  if (v.pts.length) wrap.append(tbl);
+  wrap.append(el('div', { class: 'btnrow' }, el('button', { class: 'btn', text: '+ Add point', title: 'Adds a point joined to the last one', onclick: () => {
     const last = v.pts[v.pts.length - 1] || [0, 0, 0];
-    v.pts.push([last[0] + 50, last[1], last[2]]);
+    v.pts.push(v.pts.length ? [last[0] + 50, last[1], last[2]] : [0, 0, 0]);
+    if (v.pts.length > 1) v.lines.push([v.pts.length - 2, v.pts.length - 1]);
     pm.refresh();
-    pm.spec.onChange(v, 'table', pm);
+    touch();
   } })));
   return wrap;
 }
@@ -539,7 +628,10 @@ function openFeature(type, defKey, editId) {
       if (f && f.error) toast(`${f.name}: ${f.error}`, true);
       setSelection([]);
     },
-    onClose: () => def.onOpen && app.vp.setShowPlanes(false),
+    onClose: () => {
+      if (def.onOpen) app.vp.setShowPlanes(false);
+      if (def.onClosed) def.onClosed();
+    },
     onCancel: () => {
       clearTimeout(timer);
       if (created || (editing && doc._undo.length !== undoLen)) {
@@ -550,6 +642,7 @@ function openFeature(type, defKey, editId) {
       setSelection([]);
     },
   }, vals);
+  if (def.afterOpen) def.afterOpen(pm);
   apply(pm);
   return pm;
 }
@@ -809,9 +902,25 @@ register('skProps', () => {
 });
 
 // ---------------------------------------------------------------- hole wizard
+// ISO metric screws: clearance hole (ISO 273 medium), tap drill, counterbore for socket-head cap screws
+// (DIN 974-1) and countersink for flat-head screws (ISO 10642, 90°). Nominal values.
+const HOLE_STD = {
+  M3: { clear: 3.4, tap: 2.5, cb: 6.5, k: 3.4, cs: 6.72 }, M4: { clear: 4.5, tap: 3.3, cb: 8, k: 4.4, cs: 8.96 }, M5: { clear: 5.5, tap: 4.2, cb: 10, k: 5.4, cs: 11.2 },
+  M6: { clear: 6.6, tap: 5, cb: 11, k: 6.4, cs: 13.44 }, M8: { clear: 9, tap: 6.8, cb: 15, k: 8.6, cs: 17.92 }, M10: { clear: 11, tap: 8.5, cb: 18, k: 10.6, cs: 22.4 },
+  M12: { clear: 13.5, tap: 10.2, cb: 20, k: 12.6, cs: 26.88 }, M16: { clear: 17.5, tap: 14, cb: 26, k: 16.6, cs: 33.6 }, M20: { clear: 22, tap: 17.5, cb: 33, k: 20.6, cs: 40.32 }, M24: { clear: 26, tap: 21, cb: 40, k: 24.8, cs: 48 },
+};
+function applyHoleStd(v) {
+  const s = HOLE_STD[v.std];
+  if (!s) return;
+  v.diameter = v.fit === 'tap' ? s.tap : s.clear;
+  v.cboreDia = s.cb;
+  v.cboreDepth = s.k;
+  v.csinkDia = s.cs;
+  v.csinkAngle = 90;
+}
 function holeDialog(existing) {
   const p = existing ? existing.params : null;
-  const vals = p ? { ...p, faces: [] } : { faces: [], kind: 'simple', diameter: 6, end: 'through', depth: 10, cboreDia: 11, cboreDepth: 6, csinkDia: 12, csinkAngle: 90 };
+  const vals = p ? { std: 'custom', fit: 'clear', ...p, faces: [] } : { faces: [], kind: 'simple', std: 'M6', fit: 'clear', diameter: 6.6, end: 'through', depth: 10, cboreDia: 11, cboreDepth: 6.4, csinkDia: 13.44, csinkAngle: 90 };
   if (!existing) setSelection([]);
   openPM({
     title: existing ? existing.name : 'Hole Wizard', icon: 'hole',
@@ -819,6 +928,8 @@ function holeDialog(existing) {
     fields: [
       !existing && { key: 'faces', label: 'Positions', group: 'Positions', type: 'sel', accept: ['face'], placeholder: 'Click on a flat face to place holes' },
       { key: 'kind', label: 'Hole type', group: 'Hole Specification', type: 'select', options: [['simple', 'Simple hole'], ['cbore', 'Counterbore'], ['csink', 'Countersink']] },
+      { key: 'std', label: 'Screw size', group: 'Hole Specification', type: 'select', options: [...Object.keys(HOLE_STD).map((k) => [k, k]), ['custom', 'Custom']] },
+      { key: 'fit', label: 'Hole for', group: 'Hole Specification', type: 'select', options: [['clear', 'Clearance (screw passes through)'], ['tap', 'Tapping (tap drill size)']], show: (v) => v.std !== 'custom' },
       { key: 'diameter', label: 'Diameter (mm)', group: 'Hole Specification', type: 'number', min: 0 },
       { key: 'cboreDia', label: 'C-bore Ø (mm)', group: 'Hole Specification', type: 'number', show: (v) => v.kind === 'cbore' },
       { key: 'cboreDepth', label: 'C-bore depth', group: 'Hole Specification', type: 'number', show: (v) => v.kind === 'cbore' },
@@ -827,8 +938,14 @@ function holeDialog(existing) {
       { key: 'end', label: 'End condition', group: 'End Condition', type: 'select', options: [['through', 'Through All'], ['blind', 'Blind']] },
       { key: 'depth', label: 'Depth (mm)', group: 'End Condition', type: 'number', show: (v) => v.end === 'blind' },
     ].filter(Boolean),
+    onChange: (v, key, pm) => {
+      if (key === 'std' || key === 'fit') {
+        applyHoleStd(v);
+        pm.refresh();
+      } else if (['diameter', 'cboreDia', 'cboreDepth', 'csinkDia'].includes(key) && v.std !== 'custom') v.std = 'custom'; // a typed value means a custom hole
+    },
     onOK: (v) => {
-      const spec = { kind: v.kind, diameter: v.diameter, end: v.end, depth: v.depth, cboreDia: v.cboreDia, cboreDepth: v.cboreDepth, csinkDia: v.csinkDia, csinkAngle: v.csinkAngle };
+      const spec = { std: v.std, fit: v.fit, kind: v.kind, diameter: v.diameter, end: v.end, depth: v.depth, cboreDia: v.cboreDia, cboreDepth: v.cboreDepth, csinkDia: v.csinkDia, csinkAngle: v.csinkAngle };
       if (existing) return app.doc.updateFeature(existing.id, { ...existing.params, ...spec });
       const picks = v.faces.filter((f) => f.planeSpec && f.hit && f.hit.point);
       if (!picks.length) return toast('No hole was created: click on a flat face to place it.', true);
@@ -880,18 +997,20 @@ register('flatPattern', () => {
 register('cutlist', () => {
   const list = app.doc.state.cutlist;
   if (!list.length) return toast('The cut list is empty: add Structural Members first.');
+  const rho = (MATERIALS[app.doc.material] || { density: 7850 }).density;
+  const kg = (c) => ((c.area || 0) * c.length * rho) / 1e9;
   const groups = {};
   for (const c of list) {
     const k = c.description + '|' + c.length.toFixed(2);
     groups[k] = groups[k] || { ...c, qty: 0 };
     groups[k].qty++;
   }
-  const rows = Object.values(groups);
-  const total = list.reduce((s, c) => s + c.length, 0);
-  const csv = 'Item,Qty,Description,Length (mm)\n' + rows.map((r, i) => `${i + 1},${r.qty},"${r.description}",${r.length.toFixed(1)}`).join('\n');
+  const rows = Object.values(groups).sort((a, b) => a.description.localeCompare(b.description) || b.length - a.length);
+  const total = list.reduce((s, c) => s + c.length, 0), mass = list.reduce((s, c) => s + kg(c), 0);
+  const csv = 'Item,Qty,Description,Length (mm),kg/m,Weight each (kg),Weight total (kg)\n' + rows.map((r, i) => `${i + 1},${r.qty},"${r.description}",${r.length.toFixed(1)},${(((r.area || 0) * rho) / 1e6).toFixed(3)},${kg(r).toFixed(3)},${(kg(r) * r.qty).toFixed(3)}`).join('\n');
   modal({
     title: 'Weldment Cut List', wide: true,
-    body: `<table class="grid"><tr><th>Item</th><th>Qty</th><th>Description</th><th>Length (mm)</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${r.qty}</td><td>${esc(r.description)}</td><td>${r.length.toFixed(1)}</td></tr>`).join('')}</table><p>Total length: <b>${(total / 1000).toFixed(3)} m</b> (centre-line lengths)</p>`,
+    body: `<table class="grid"><tr><th>Item</th><th>Qty</th><th>Description</th><th>Length (mm)</th><th>kg/m</th><th>Weight each</th><th>Weight total</th></tr>${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${r.qty}</td><td>${esc(r.description)}</td><td>${r.length.toFixed(1)}</td><td>${(((r.area || 0) * rho) / 1e6).toFixed(2)}</td><td>${kg(r).toFixed(2)} kg</td><td>${(kg(r) * r.qty).toFixed(2)} kg</td></tr>`).join('')}</table><p>Total length: <b>${(total / 1000).toFixed(3)} m</b> · Total weight: <b>${mass.toFixed(2)} kg</b> (${esc(app.doc.material)}, ${rho} kg/m³). Lengths are centre-line lengths; mitred ends are not deducted.</p>`,
     buttons: [{ label: 'Save CSV', action: () => (run('download', new Blob([csv], { type: 'text/csv' }), `${app.doc.name}-cutlist.csv`), true) }, { label: 'Close', primary: true }],
   });
 });
