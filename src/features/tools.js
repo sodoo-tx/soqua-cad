@@ -646,7 +646,7 @@ register('meshToSolid', async () => {
   await new Promise((r) => setTimeout(r, 30));
   const shape = K.solidFromTriangles(g.attributes.position.array);
   const isSolid = K.massProps(shape).volume > 1e-9;
-  app.doc.addFeature('import', { brep: shape.serialize(), as: isSolid ? 'solid' : 'surface', source: f.name }, { name: f.name + (isSolid ? '-Solid' : '-Surface') });
+  app.doc.addFeature('import', { brepId: app.doc.addBrep(shape.serialize()), as: isSolid ? 'solid' : 'surface', source: f.name }, { name: f.name + (isSolid ? '-Solid' : '-Surface') });
   app.doc.setSuppressed(f.id, true);
   toast(isSolid ? 'Converted to a solid body (faceted). The mesh body was suppressed.' : 'The mesh is not watertight, so it became a surface body.');
 });

@@ -21,7 +21,9 @@ export class Viewport {
   constructor(canvas, labels) {
     this.canvas = canvas;
     this.labels = labels;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    // no preserveDrawingBuffer: it forces an extra full-frame copy every frame on mobile GPUs.
+    // snapshot() reads the canvas in the same task as its render, which does not need it.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.localClippingEnabled = true;
     this.renderer.shadowMap.enabled = true;
@@ -280,6 +282,10 @@ export class Viewport {
       this.groups.bodies.add(mesh);
       this.pickables.push(mesh);
     }
+    // total triangle count decides how eagerly hover picking runs
+    let tris = 0;
+    for (const m of this.pickables) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+    this.heavy = tris > 350000;
     this.applyDisplay();
     this.applyClip();
     this.buildSketches(doc);
@@ -306,6 +312,10 @@ export class Viewport {
     const loop = (t) => {
       this._fx = 0;
       let alive = false;
+      if (!this._flash && !this.turntable && (this._fxSkip = !this._fxSkip)) {
+        if (this.animate && this.groups.overlay.children.length) this._fx = requestAnimationFrame(loop);
+        return;
+      }
       if (this.animate && this.groups.overlay.children.length) {
         const k = 0.5 + 0.5 * Math.sin(t * 0.0055);
         this.groups.overlay.traverse((o) => {
@@ -635,9 +645,17 @@ export class Viewport {
     if (h.kind === 'face') {
       const t = h.body.tess, g = t.faceGroups.find((x) => x.face === h.index);
       if (!g) return null;
+      // copy just this face's triangles: sharing the body's position attribute would make three.js
+      // free and re-upload the whole vertex buffer every time a highlight is disposed
+      const pos = new Float32Array(g.count * 3);
+      for (let k = 0; k < g.count; k++) {
+        const vi = t.indices[g.start + k] * 3;
+        pos[k * 3] = t.positions[vi];
+        pos[k * 3 + 1] = t.positions[vi + 1];
+        pos[k * 3 + 2] = t.positions[vi + 2];
+      }
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(t.positions, 3));
-      geo.setIndex(new THREE.BufferAttribute(t.indices.subarray(g.start, g.start + g.count), 1));
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
       m.renderOrder = 5;
       m.userData.pulse = [0.34, 0.26];
@@ -793,7 +811,8 @@ export class Viewport {
         // ray-casting is the expensive part of hovering: do it at most once per rendered frame
         this._hoverEv = e;
         if (!this._hoverRaf) {
-          this._hoverRaf = requestAnimationFrame(() => {
+          const later = this.heavy ? (cb) => setTimeout(cb, 90) : requestAnimationFrame;
+          this._hoverRaf = later(() => {
             this._hoverRaf = 0;
             const ev = this._hoverEv;
             if (!ev || this.tool && this.tool.noHover) return;

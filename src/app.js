@@ -569,6 +569,11 @@ export function scheduleAutosave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
+      // estimate first: serialising tens of megabytes on every change would stall the UI
+      let est = 20000;
+      for (const b of Object.values(app.doc.blobs)) est += ((b.positions ? b.positions.byteLength : 0) + (b.indices ? b.indices.byteLength : 0)) * 1.4;
+      for (const x of Object.values(app.doc.breps || {})) est += x.length;
+      if (est > 4_500_000) return;
       const s = app.doc.serialize();
       if (s.length < 4_500_000) localStorage.setItem(AUTOSAVE, s);
     } catch (e) {

@@ -32,6 +32,8 @@ export class Document {
     this.drawing = null;
     this.custom = { title: '', drawnBy: '', checkedBy: '', customer: '', material: '' };
     this.blobs = {}; // large binary payloads (meshes) keyed by id, kept out of undo snapshots
+    this.breps = {}; // imported exact geometry (BREP text) keyed by id: megabytes that must not sit in every undo snapshot
+    this._brepShapes = new Map(); // id -> parsed shape, so a rebuild does not re-parse the text
     this.state = emptyState();
     this._cache = [];
     this._undo = [];
@@ -164,11 +166,19 @@ export class Document {
     this.rebuild();
   }
 
+  addBrep(text) {
+    const id = uid('b');
+    this.breps[id] = text;
+    return id;
+  }
+
   // ---- persistence
   serialize() {
     const blobs = {};
     for (const [k, v] of Object.entries(this.blobs)) blobs[k] = { positions: b64(v.positions), indices: v.indices ? b64(v.indices) : null, colors: v.colors ? b64(v.colors) : null };
-    return JSON.stringify({ app: 'SOQUA design', version: 1, doc: JSON.parse(this.snapshot()), blobs });
+    const used = new Set(this.features.map((f) => f.params && f.params.brepId).filter(Boolean));
+    const breps = Object.fromEntries(Object.entries(this.breps).filter(([k]) => used.has(k)));
+    return JSON.stringify({ app: 'SOQUA design', version: 1, doc: JSON.parse(this.snapshot()), blobs, breps });
   }
   static deserialize(text) {
     const j = JSON.parse(text);
@@ -178,6 +188,7 @@ export class Document {
     for (const [k, v] of Object.entries(j.blobs || {})) {
       d.blobs[k] = { positions: new Float32Array(unb64(v.positions)), indices: v.indices ? new Uint32Array(unb64(v.indices)) : null, colors: v.colors ? new Float32Array(unb64(v.colors)) : null };
     }
+    d.breps = j.breps || {};
     return d;
   }
 
@@ -602,7 +613,15 @@ function runFeature(doc, f, st) {
       break;
     }
     case 'import': {
-      const shape = K.R.deserializeShape(p.brep);
+      let shape;
+      if (p.brepId) {
+        shape = doc._brepShapes.get(p.brepId);
+        if (!shape) {
+          if (!doc.breps[p.brepId]) throw new Error('The imported geometry is missing from this document');
+          shape = K.R.deserializeShape(doc.breps[p.brepId]);
+          doc._brepShapes.set(p.brepId, shape);
+        }
+      } else shape = K.R.deserializeShape(p.brep); // documents saved before imports were stored separately
       if (p.as === 'surface') st.surfaces.push({ id: f.id, name: f.name, shape });
       else setSolid(st, f, shape, st.solid ? 'new' : 'add');
       break;

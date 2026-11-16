@@ -125,7 +125,7 @@ export async function importFiles(files, replace) {
         else shape = await K.importSTEP(file);
         const mp = K.massProps(shape);
         const asSolid = mp.volume > 1e-9;
-        app.doc.addFeature('import', { brep: shape.serialize(), as: asSolid ? 'solid' : 'surface', source: file.name }, { name: base });
+        app.doc.addFeature('import', { brepId: app.doc.addBrep(shape.serialize()), as: asSolid ? 'solid' : 'surface', source: file.name }, { name: base });
         toast(`${file.name}: imported as ${asSolid ? 'a solid body' : 'a surface body'} (${shape.faces.length} faces). Features like fillet, shell, cut and patterns work on it.`);
       } else if (ext === 'dxf' || ext === 'svg') {
         await import2D(file, ext, base);

@@ -39,6 +39,8 @@ export class Sketcher {
   }
   destroy() {
     window.removeEventListener('keydown', this._key);
+    if (this._mvRaf) cancelAnimationFrame(this._mvRaf);
+    this._mvRaf = 0;
     this.vp.tool = null;
     this.vp.onCamera = null;
     this.vp.disposeGroup(this.group);
@@ -328,6 +330,7 @@ export class Sketcher {
   }
   down(e) {
     if (e.button !== 0) return false;
+    this._mv = null; // a new press: drop any stale pending move
     const p = this.evPoint(e, false);
     if (!p) return false;
     this.downAt = [e.clientX, e.clientY];
@@ -353,6 +356,21 @@ export class Sketcher {
     return true;
   }
   move(e) {
+    this._mv = { clientX: e.clientX, clientY: e.clientY, buttons: e.buttons, pointerType: e.pointerType };
+    if (this._mvRaf) return;
+    this._mvRaf = requestAnimationFrame(() => {
+      this._mvRaf = 0;
+      if (this._mv) this.moveNow(this._mv);
+    });
+  }
+  // apply a pending pointer move immediately (before a click / release is handled)
+  flushMove() {
+    if (!this._mvRaf) return;
+    cancelAnimationFrame(this._mvRaf);
+    this._mvRaf = 0;
+    if (this._mv) this.moveNow(this._mv);
+  }
+  moveNow(e) {
     if (this.downAt && Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) > 4) this.movedFar = true;
     // a finger dragging a drawing tool aims with a cursor lifted above the fingertip
     const p = this.evPoint(e, this.tool !== 'select' && !!e.buttons && this.movedFar);
@@ -380,14 +398,14 @@ export class Sketcher {
           this.solve({ drag: { p: en.a, x: d.a0[0] + dx, y: d.a0[1] + dy } });
           this.solve({ drag: { p: en.b, x: d.b0[0] + dx, y: d.b0[1] + dy } });
         }
-        this.redraw();
+        this.redraw(true);
         return;
       }
       const h = this.hit(p);
       const key = h ? h.id : null;
       if (key !== this.hover) {
         this.hover = key;
-        this.redraw();
+        this.redraw(true);
       }
       return;
     }
@@ -395,6 +413,7 @@ export class Sketcher {
     this.redrawPreview();
   }
   up(e) {
+    this.flushMove();
     const p = this.evPoint(e, false) || this.cursor;
     if (this.tool === 'select') {
       const d = this.dragging;
@@ -1061,7 +1080,10 @@ export class Sketcher {
       this.group.remove(this.relObj);
       this.relObj.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
-        if (o.material) this.vp.lineMats.delete(o.material);
+        if (o.material) {
+          this.vp.lineMats.delete(o.material);
+          o.material.dispose();
+        }
       });
       this.relObj = null;
     }
@@ -1469,12 +1491,15 @@ export class Sketcher {
     for (const l of this.labelEls) l.el.remove();
     this.labelEls = [];
   }
-  redraw() {
+  // light = geometry only: the label elements are kept and just repositioned. Used on every frame
+  // of a drag or hover, where rebuilding ~100 DOM nodes and re-ranking the constraints is wasted work.
+  redraw(light = false) {
     const vp = this.vp, g = this.group;
     vp.disposeGroup(g);
     this.relObj = null;
     const W = (p) => toWorld(this.pl, p);
-    const st = this.status();
+    if (!light || !this._st) this._st = this.status();
+    const st = this._st;
     const base = st.dof > 0 ? COL.under : COL.full;
     const buckets = { norm: [], cons: [], sel: [], hov: [], dim: [] };
     const push = (arr, pts) => {
@@ -1492,12 +1517,17 @@ export class Sketcher {
       for (const p of polys) push(arr, p);
     }
     // dimension graphics
-    this.clearLabels();
+    if (!light) this.clearLabels();
     for (const c of this.sk.cons) {
       if (!DIMS.includes(c.type)) continue;
       const gfx = this.dimGraphics(c);
       for (const sg of gfx.segs) push(buckets.dim, sg);
       const at = gfx.at;
+      if (light) {
+        const l = this.labelEls.find((x) => x.con === c.id);
+        if (l) l.p = W(at);
+        continue;
+      }
       const d = el('div', { class: 'dimlabel', text: this.dimText(c), title: 'Double-click to edit · drag to move · Delete to remove' });
       d.addEventListener('dblclick', (ev) => {
         ev.stopPropagation();
@@ -1527,9 +1557,16 @@ export class Sketcher {
       this.vp.labels.append(d);
       this.labelEls.push({ el: d, p: W(at), con: c.id });
     }
+    if (light) {
+      for (const l of this.labelEls) {
+        if (!l.calc) continue;
+        const q = l.calc();
+        if (q) l.p = W(q);
+      }
+    } else {
     // relation badges: one green tile per relation on every entity it involves
     const seen = {};
-    const badge = (c, at, small) => {
+    const badge = (c, at, small, calc) => {
       const key = at.map((x) => x.toFixed(3)).join(',');
       const n = (seen[key] = (seen[key] || 0) + 1);
       const d = el('div', { class: 'relbadge' + (small ? ' small' : '') + (this.sel.has(c.id) ? ' sel' : ''), text: GLYPH[c.type], title: REL_NAME[c.type] + ' – click to select, Delete to remove', style: { marginLeft: 12 + (n - 1) * 19 + 'px', marginTop: '-15px' } });
@@ -1543,7 +1580,7 @@ export class Sketcher {
         this.onChange('selection');
       });
       this.vp.labels.append(d);
-      this.labelEls.push({ el: d, p: W(at) });
+      this.labelEls.push({ el: d, p: W(at), calc });
     };
     const anchorOf = (e) => {
       if (e.type === 'line') {
@@ -1564,14 +1601,15 @@ export class Sketcher {
       if (DIMS.includes(c.type) || !GLYPH[c.type]) continue;
       const pointy = ['pointOnLine', 'pointOnCircle', 'coincident', 'midpoint', 'fix', 'symmetric'].includes(c.type);
       if (pointy) {
-        for (const k of ['p', 'q']) if (c[k] && this.sk.pts[c[k]] && c[k] !== 'origin') badge(c, this.P(c[k]), c.type !== 'fix' && c.type !== 'symmetric');
+        for (const k of ['p', 'q']) if (c[k] && this.sk.pts[c[k]] && c[k] !== 'origin') badge(c, this.P(c[k]), c.type !== 'fix' && c.type !== 'symmetric', () => this.P(c[k]));
         continue;
       }
       for (const k of ['line', 'ent', 'l1', 'l2', 'e1', 'e2']) {
         const e = c[k] && this.ent(c[k]);
         const at = e && anchorOf(e);
-        if (at) badge(c, at, false);
+        if (at) badge(c, at, false, () => anchorOf(e));
       }
+    }
     }
     g.add(vp.fat(buckets.norm, base, 2), vp.fat(buckets.cons, COL.cons, 1.3, true), vp.fat(buckets.dim, COL.dim, 1), vp.fat(buckets.hov, COL.hover, 3), vp.fat(buckets.sel, COL.sel, 3));
     // points
@@ -1638,7 +1676,10 @@ export class Sketcher {
       this.group.remove(this.previewObj);
       this.previewObj.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
-        if (o.material) this.vp.lineMats.delete(o.material);
+        if (o.material) {
+          this.vp.lineMats.delete(o.material);
+          o.material.dispose();
+        }
       });
       this.previewObj = null;
     }
