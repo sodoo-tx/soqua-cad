@@ -28,7 +28,7 @@ faces, and a drawing sheet with a title block.
 | **Render** | Physically based appearances and procedural textures, per-face colours, scene/background, floor shadows, high-resolution PNG output. |
 | **Drawing** | Sheet formats (title blocks), standard 3 view (first or third angle), any model view with hidden-line removal, per-view scale, smart dimensions, notes, centre marks, title-block properties. Vector export to **PDF** (font embedded), **DXF** and **SVG**. |
 | **Viewport** | Z-up model space, named reference planes that glow on hover, glowing selection, build flash, turntable, animated simulation results; all motion can be switched off. |
-| **Devices** | Mouse, trackpad and touch (one finger rotates, two fingers pan/zoom), responsive layout, installable as a PWA and usable offline after the first load. |
+| **Devices** | Mouse, trackpad and touch (one finger rotates, two fingers pan/zoom, press-and-hold for the context menu). On phones dialogs open as a bottom sheet so the model stays visible, the view renders at reduced resolution while moving, and display meshes are lighter. Installable as a PWA and usable offline after the first load. |
 
 ### File formats
 

@@ -272,3 +272,22 @@ body.no-anim *, body.no-anim *::before, body.no-anim *::after { animation: none 
   .livelabel { font-size: 14px; padding: 4px 8px; }
   #corner button { width: 52px; height: 52px; }
 }
+
+/* working pill */
+#busy { position: absolute; top: 46px; left: 50%; transform: translateX(-50%); z-index: 7; padding: 5px 14px 5px 30px; border-radius: 16px; background: rgba(22,34,48,.9); color: #fff; font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.3); pointer-events: none; }
+#busy::before { content: ''; position: absolute; left: 10px; top: 50%; width: 12px; height: 12px; margin-top: -7px; border: 2px solid rgba(255,255,255,.35); border-top-color: #2fc4ff; border-radius: 50%; animation: soq-spin .7s linear infinite; }
+@keyframes soq-spin { to { transform: rotate(360deg); } }
+
+/* phones: the PropertyManager is a bottom sheet, so the model stays visible and pickable above it */
+@media (max-width: 760px) {
+  #left.sheet { top: auto; bottom: 0; left: 0; right: 0; width: 100%; height: 46dvh; max-height: 46dvh; transform: translateY(103%); border-right: 0; border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px rgba(0,0,0,.28); }
+  #left.sheet.open { transform: none; }
+  #left.sheet #left-tabs { display: none; }
+  #left.sheet .pm-head { border-radius: 14px 14px 0 0; padding: 10px 12px; }
+  #left.sheet .pm-head::before { content: ''; position: absolute; top: 4px; left: 50%; width: 38px; height: 4px; margin-left: -19px; border-radius: 2px; background: #b8c2cd; }
+  #left.sheet .pm-head button { width: 44px; height: 38px; font-size: 21px; }
+  #left.sheet .selbox { min-height: 40px; }
+  #left.sheet .fld { grid-template-columns: 118px 1fr; }
+  #busy { top: 52px; }
+  .pm-msg { margin: 6px 8px; padding: 6px 8px; font-size: 12px; }
+}

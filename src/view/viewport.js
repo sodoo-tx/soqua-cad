@@ -24,7 +24,12 @@ export class Viewport {
     // no preserveDrawingBuffer: it forces an extra full-frame copy every frame on mobile GPUs.
     // snapshot() reads the canvas in the same task as its render, which does not need it.
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    // resolution: capped at 2x; while the camera is moving on a phone or a heavy model the view is
+    // drawn at a lower resolution and sharpened again as soon as it stops
+    this.coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+    this.baseDpr = Math.min(2, window.devicePixelRatio || 1);
+    this.navDpr = Math.min(this.baseDpr, this.coarse ? 1.25 : 1);
+    this.renderer.setPixelRatio(this.baseDpr);
     this.renderer.localClippingEnabled = true;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -151,7 +156,7 @@ export class Viewport {
       const b = new THREE.Box3().setFromObject(g);
       if (!b.isEmpty()) box.union(b);
     }
-    if (box.isEmpty()) box.set(new THREE.Vector3(-95, -95, -95), new THREE.Vector3(95, 95, 95)); // empty part: frame the three default planes
+    if (box.isEmpty()) box.set(new THREE.Vector3(-135, -135, -135), new THREE.Vector3(135, 135, 135)); // empty part: frame the three default planes
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     this.modelSize = Math.max(10, sphere.radius * 2);
     const a = this.w / this.h;
@@ -217,12 +222,13 @@ export class Viewport {
     const add = (body) => {
       let tess;
       try {
-        const tol = Math.max(0.01, this.modelSize * 0.0004);
+        // phones get a slightly coarser display mesh (about half the triangles on curved parts)
+        const tol = Math.max(0.01, this.modelSize * (this.coarse ? 0.0008 : 0.0004));
         const key = Math.round(Math.log2(tol) * 2); // re-mesh only when the required precision changes noticeably
         const hit = this._tessCache.get(body.shape);
         if (hit && hit.key === key) tess = hit.tess;
         else {
-          tess = K.tessellate(body.shape, { tolerance: tol, angularTolerance: 0.2 });
+          tess = K.tessellate(body.shape, { tolerance: tol, angularTolerance: this.coarse ? 0.32 : 0.2 });
           this._tessCache.set(body.shape, { key, tess });
         }
       } catch (e) {
@@ -286,6 +292,7 @@ export class Viewport {
     let tris = 0;
     for (const m of this.pickables) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
     this.heavy = tris > 350000;
+    this.lowNav = this.coarse || tris > 150000;
     this.applyDisplay();
     this.applyClip();
     this.buildSketches(doc);
@@ -744,13 +751,28 @@ export class Viewport {
   _bind() {
     const c = this.canvas;
     const ptrs = new Map();
-    let drag = null, moved = false, pinch = null, downAt = null;
+    let drag = null, moved = false, pinch = null, downAt = null, longPress = 0;
     c.addEventListener('contextmenu', (e) => e.preventDefault());
     c.addEventListener('pointerdown', (e) => {
-      c.setPointerCapture(e.pointerId);
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch (err) {
+        /* pointer already gone (some browsers, synthetic events) */
+      }
       ptrs.set(e.pointerId, e);
       moved = false;
       downAt = [e.clientX, e.clientY];
+      clearTimeout(longPress);
+      if (e.pointerType === 'touch' && ptrs.size === 1) {
+        // press and hold opens the context menu (there is no right mouse button on a phone)
+        const press = { clientX: e.clientX, clientY: e.clientY, pointerType: 'touch' };
+        longPress = setTimeout(() => {
+          if (moved || ptrs.size !== 1 || this.tool || !this.onContext) return;
+          drag = null;
+          if (navigator.vibrate) navigator.vibrate(12);
+          this.onContext(this.pick(press), press);
+        }, 560);
+      }
       if (ptrs.size === 2) {
         const [a, b] = [...ptrs.values()];
         pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 };
@@ -786,6 +808,7 @@ export class Viewport {
         return;
       }
       if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) moved = true;
+      if (moved) clearTimeout(longPress);
       if (drag && drag.mode === 'tool') {
         if (this.tool && this.tool.move) this.tool.move(e, this);
         return;
@@ -824,6 +847,7 @@ export class Viewport {
       }
     });
     const up = (e) => {
+      clearTimeout(longPress);
       ptrs.delete(e.pointerId);
       if (ptrs.size < 2) pinch = null;
       const d = drag;
@@ -856,7 +880,22 @@ export class Viewport {
       this.zoomAt(Math.exp(Math.sign(e.deltaY) * Math.min(0.35, Math.abs(e.deltaY) * 0.0015)), e);
     }, { passive: false });
   }
+  // called on every rotate / pan / zoom step: drop the resolution while moving, restore when idle
+  nav() {
+    if (!this.lowNav || this.navDpr >= this.baseDpr) return;
+    if (!this._navLow) {
+      this._navLow = true;
+      this.renderer.setPixelRatio(this.navDpr);
+    }
+    clearTimeout(this._navT);
+    this._navT = setTimeout(() => {
+      this._navLow = false;
+      this.renderer.setPixelRatio(this.baseDpr);
+      this.render();
+    }, 240);
+  }
   rotate(dx, dy) {
+    this.nav();
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-dy * 0.008, -dx * 0.008, 0, 'XYZ'));
     this.quat.multiply(q).normalize();
     this.qGoal = null;
@@ -864,12 +903,14 @@ export class Viewport {
     this.updateCamera();
   }
   pan(dx, dy) {
+    this.nav();
     const px = this.pxSize();
     const r = new THREE.Vector3(1, 0, 0).applyQuaternion(this.quat), u = new THREE.Vector3(0, 1, 0).applyQuaternion(this.quat);
     this.target.addScaledVector(r, -dx * px).addScaledVector(u, dy * px);
     this.updateCamera();
   }
   zoomAt(f, e) {
+    this.nav();
     const rect = this.canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left - rect.width / 2, my = e.clientY - rect.top - rect.height / 2;
     const px0 = this.pxSize();
@@ -925,7 +966,9 @@ export class Viewport {
   }
   // PNG snapshot at a multiple of the current resolution
   snapshot(mult = 2, { transparent = false, background = '#ffffff' } = {}) {
-    const pr = this.renderer.getPixelRatio();
+    clearTimeout(this._navT);
+    this._navLow = false;
+    const pr = this.baseDpr;
     const helpers = [this.groups.planes, this.groups.overlay, this.groups.sketches, this.groups.active];
     const vis = helpers.map((g) => g.visible);
     helpers.forEach((g) => (g.visible = false));

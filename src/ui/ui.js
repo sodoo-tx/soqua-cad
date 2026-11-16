@@ -113,6 +113,7 @@ export function closePM(commit = false) {
   currentPM = null;
   $('#pm').innerHTML = '';
   showLeft('tree');
+  if (innerWidth <= 760) document.getElementById('left').classList.remove('open'); // phones: put the sheet away
   if (commit) pm.spec.onOK && pm.spec.onOK(pm.vals);
   else pm.spec.onCancel && pm.spec.onCancel();
   pm.spec.onClose && pm.spec.onClose();
@@ -121,6 +122,19 @@ export function showLeft(tab) {
   for (const b of document.querySelectorAll('#left-tabs button')) b.classList.toggle('active', b.dataset.tab === tab);
   $('#tree').hidden = tab !== 'tree';
   $('#pm').hidden = tab !== 'pm';
+  // on phones the PropertyManager is a bottom sheet so the model stays visible and pickable above it
+  document.getElementById('left').classList.toggle('sheet', tab === 'pm');
+}
+
+// small "working" pill, shown while a slow rebuild runs
+export function busy(on, text = 'Rebuilding…') {
+  let b = document.getElementById('busy');
+  if (!b) {
+    b = el('div', { id: 'busy', hidden: true });
+    document.getElementById('view').append(b);
+  }
+  b.textContent = text;
+  b.hidden = !on;
 }
 
 export function openPM(spec, vals = {}) {

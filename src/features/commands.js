@@ -1,6 +1,6 @@
 // Modeling commands: every feature's PropertyManager dialog, with live preview.
 import { app, register, run, setSelection, syncHighlight, enterSketch, exitSketch, startSketchOn, buildRibbon, buildTree, hitToItem, resolveItem } from '../app.js';
-import { openPM, closePM, pmActive, toast, setHint, el, modal, promptDlg, popup, esc } from '../ui/ui.js';
+import { openPM, closePM, pmActive, toast, setHint, el, modal, promptDlg, popup, esc, busy } from '../ui/ui.js';
 import { V, BASE_PLANES, fmt, toLocal } from '../geom.js';
 import { SECTIONS, STANDARD_SIZES, sectionLoops, sectionArea, profileLabel } from './weldments.js';
 import { start3DSketch } from '../sketch/sketch3d.js';
@@ -608,7 +608,20 @@ function openFeature(type, defKey, editId) {
     onChange: (v, key, p) => {
       if (def.onChange) def.onChange(v, key, p);
       clearTimeout(timer);
-      timer = setTimeout(() => pmActive() === p && apply(p), 160);
+      timer = setTimeout(() => {
+        if (pmActive() !== p) return;
+        // rebuilds block the page while they run: if the last one was slow, show "Rebuilding…" first
+        // and give the browser a moment to paint it
+        if ((doc.lastMs || 0) < 120) return apply(p);
+        busy(true);
+        setTimeout(() => {
+          try {
+            if (pmActive() === p) apply(p);
+          } finally {
+            busy(false);
+          }
+        }, 30);
+      }, 150);
     },
     onOK: () => {
       clearTimeout(timer);

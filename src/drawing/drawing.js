@@ -448,7 +448,11 @@ class Drawing {
     let drag = null, pinch = null, moved = false, down = null;
     h.addEventListener('contextmenu', (e) => e.preventDefault());
     h.addEventListener('pointerdown', (e) => {
-      h.setPointerCapture(e.pointerId);
+      try {
+        h.setPointerCapture(e.pointerId);
+      } catch (err) {
+        /* pointer already gone */
+      }
       ptrs.set(e.pointerId, e);
       moved = false;
       down = [e.clientX, e.clientY];

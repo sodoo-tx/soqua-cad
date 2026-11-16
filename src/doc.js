@@ -194,6 +194,7 @@ export class Document {
 
   // ---- regeneration
   rebuild() {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
     const st = emptyState();
     let end = this.features.length;
     if (this.rollback) end = this.indexOf(this.rollback) + 1;
@@ -219,7 +220,7 @@ export class Document {
         try {
           runFeature(this, f, st);
         } catch (e) {
-          f.error = friendly(e);
+          f.error = friendly(e, f);
           console.warn(`Feature ${f.name} failed:`, e);
         }
       }
@@ -227,14 +228,39 @@ export class Document {
     }
     this._cache = cache;
     this.state = st;
+    this.lastMs = (typeof performance !== 'undefined' ? performance.now() : 0) - t0; // how long this rebuild took
     this.emit('rebuild');
     return st;
   }
 }
 
-function friendly(e) {
+// what usually fixes a kernel failure, per feature type
+const KERNEL_HINT = {
+  extrude: 'Check that the sketch contour is closed and does not cross itself.',
+  revolve: 'The profile must be closed and must not cross the centerline.',
+  sweep: 'The profile should be perpendicular to the start of the path and small enough not to fold over itself in tight bends.',
+  loft: 'Profiles must be closed, on different planes, and picked in order.',
+  fillet: 'Try a smaller radius, or fillet fewer edges at once.',
+  chamfer: 'Try a smaller distance.',
+  shell: 'Try a thinner wall or remove a different face. Bodies made of separate pieces or with fine detail (threads) often cannot be shelled.',
+  draft: 'Try a smaller angle or different faces.',
+  thread: 'Check the pitch and depth against the diameter, and that the thread direction runs into the material.',
+  hole: 'Check the hole diameter and depth against the body.',
+  thicken: 'Try a smaller thickness or the other side.',
+  edgeFlange: 'Pick a straight outer edge on the thickness face of the sheet.',
+  linearPattern: 'The copies could not be merged with the body: check spacing and direction.',
+  circularPattern: 'The copies could not be merged with the body: check the axis and count.',
+  mirror: 'The mirrored copy could not be merged with the body.',
+  structuralMember: 'Check the profile size against the length of the sketch lines.',
+  surfOffset: 'Try a smaller offset distance.',
+  cutPlane: 'The plane does not cut through the body.',
+};
+function friendly(e, f) {
   const m = e && e.message ? e.message : String(e);
-  if (/WebAssembly|Exception|\[object/.test(m) || /^\d+$/.test(m)) return 'The geometry kernel could not build this feature with the current inputs.';
+  if (/WebAssembly|Exception|\[object/.test(m) || /^\d+$/.test(m)) {
+    const hint = f && KERNEL_HINT[f.type];
+    return 'The geometry kernel could not build this feature.' + (hint ? ' ' + hint : ' Check the inputs and try different values.');
+  }
   return m;
 }
 
